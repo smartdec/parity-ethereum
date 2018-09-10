@@ -30,13 +30,13 @@ use ethcore_logger::RotatingLogger;
 use jsonrpc_core::{Result, BoxFuture};
 use jsonrpc_core::futures::Future;
 use jsonrpc_macros::Trailing;
-use v1::helpers::{self, errors, ipfs, SigningQueue, SignerService, NetworkSettings};
+use v1::helpers::{self, errors, ipfs, SigningQueue, SignerService, NetworkSettings, verify_signature};
 use v1::helpers::dispatch::LightDispatcher;
 use v1::helpers::light_fetch::{LightFetch, light_all_transactions};
 use v1::metadata::Metadata;
 use v1::traits::Parity;
 use v1::types::{
-	Bytes, U256, H64, H160, H256, H512, CallRequest,
+	Bytes, U256, H64, H160, H520, H256, H512, CallRequest,
 	Peers, Transaction, RpcSettings, Histogram,
 	TransactionStats, LocalTransactionStatus,
 	BlockNumber, LightBlockNumber, ConsensusCapability, VersionInfo,
@@ -44,6 +44,7 @@ use v1::types::{
 	AccountInfo, HwAccountInfo, Header, RichHeader, Receipt,
 };
 use Host;
+use v1::types::RichBasicAccount;
 
 /// Parity implementation for light client.
 pub struct ParityClient {
@@ -413,5 +414,9 @@ impl Parity for ParityClient {
 
 	fn submit_work_detail(&self, _nonce: H64, _pow_hash: H256, _mix_hash: H256) -> Result<H256> {
 		Err(errors::light_unimplemented(None))
+	}
+
+	fn verify_signature(&self, is_prefixed: bool, message: Bytes, signature: H520) -> Result<RichBasicAccount> {
+		verify_signature(is_prefixed, message, signature)
 	}
 }
