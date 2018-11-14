@@ -14,7 +14,8 @@
 // You should have received a copy of the GNU General Public License
 // along with Parity.  If not, see <http://www.gnu.org/licenses/>.
 
-use std::fmt;
+extern crate array_init;
+
 use instructions;
 
 /// Stack trait with VM-friendly API
@@ -42,16 +43,16 @@ pub struct VecStack<S> {
 	logs: [S; instructions::MAX_NO_OF_TOPICS]
 }
 
-impl<S : Copy> VecStack<S> {
+impl<S : Clone> VecStack<S> {
 	pub fn with_capacity(capacity: usize, zero: S) -> Self {
 		VecStack {
 			stack: Vec::with_capacity(capacity),
-			logs: [zero; instructions::MAX_NO_OF_TOPICS]
+			logs: array_init::array_init(|_| zero.clone()),
 		}
 	}
 }
 
-impl<S : fmt::Display> Stack<S> for VecStack<S> {
+impl<S> Stack<S> for VecStack<S> {
 	fn peek(&self, no_from_top: usize) -> &S {
 		&self.stack[self.stack.len() - no_from_top - 1]
 	}

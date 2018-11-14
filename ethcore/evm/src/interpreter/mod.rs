@@ -173,8 +173,9 @@ impl From<vm::Error> for InterpreterResult {
 }
 
 /// Intepreter EVM implementation
-pub struct Interpreter<Cost: CostType> {
+pub struct Interpreter<Cost: CostType, Shadow: Default + Clone + Send = ()> {
 	mem: Vec<u8>,
+	shadow_mem: Vec<Shadow>,
 	cache: Arc<SharedCache>,
 	params: InterpreterParams,
 	reader: CodeReader,
@@ -184,14 +185,17 @@ pub struct Interpreter<Cost: CostType> {
 	done: bool,
 	valid_jump_destinations: Option<Arc<BitSet>>,
 	gasometer: Option<Gasometer<Cost>>,
-	stack: VecStack<U256>,
+	stack: VecStack<(U256, Shadow)>,
 	resume_output_range: Option<(U256, U256)>,
 	resume_result: Option<InstructionResult<Cost>>,
 	last_stack_ret_len: usize,
 	_type: PhantomData<Cost>,
 }
 
-impl<Cost: 'static + CostType> vm::Exec for Interpreter<Cost> {
+impl<Cost, Shadow> vm::Exec for Interpreter<Cost, Shadow>
+	where Cost: 'static + CostType,
+		  Shadow: 'static + Default + Clone + Send
+{
 	fn exec(mut self: Box<Self>, ext: &mut vm::Ext) -> vm::ExecTrapResult<GasLeft> {
 		loop {
 			let result = self.step(ext);
@@ -212,7 +216,10 @@ impl<Cost: 'static + CostType> vm::Exec for Interpreter<Cost> {
 	}
 }
 
-impl<Cost: 'static + CostType> vm::ResumeCall for Interpreter<Cost> {
+impl<Cost, Shadow> vm::ResumeCall for Interpreter<Cost, Shadow>
+	where Cost: 'static + CostType,
+		  Shadow: 'static + Default + Clone + Send
+{
 	fn resume_call(mut self: Box<Self>, result: MessageCallResult) -> Box<vm::Exec> {
 		{
 			let this = &mut *self;
@@ -225,7 +232,7 @@ impl<Cost: 'static + CostType> vm::ResumeCall for Interpreter<Cost> {
 					(&mut output[..len]).copy_from_slice(&data[..len]);
 
 					this.return_data = data;
-					this.stack.push(U256::one());
+					this.stack.push((U256::one(), Default::default()));
 					this.resume_result = Some(InstructionResult::UnusedGas(Cost::from_u256(gas_left).expect("Gas left cannot be greater than current one")));
 				},
 				MessageCallResult::Reverted(gas_left, data) => {
@@ -234,11 +241,11 @@ impl<Cost: 'static + CostType> vm::ResumeCall for Interpreter<Cost> {
 					(&mut output[..len]).copy_from_slice(&data[..len]);
 
 					this.return_data = data;
-					this.stack.push(U256::zero());
+					this.stack.push((U256::zero(), Default::default()));
 					this.resume_result = Some(InstructionResult::UnusedGas(Cost::from_u256(gas_left).expect("Gas left cannot be greater than current one")));
 				},
 				MessageCallResult::Failed => {
-					this.stack.push(U256::zero());
+					this.stack.push((U256::zero(), Default::default()));
 					this.resume_result = Some(InstructionResult::Ok);
 				},
 			}
@@ -247,20 +254,23 @@ impl<Cost: 'static + CostType> vm::ResumeCall for Interpreter<Cost> {
 	}
 }
 
-impl<Cost: 'static + CostType> vm::ResumeCreate for Interpreter<Cost> {
+impl<Cost, Shadow> vm::ResumeCreate for Interpreter<Cost, Shadow>
+	where Cost: 'static + CostType,
+		  Shadow: 'static + Default + Clone + Send
+{
 	fn resume_create(mut self: Box<Self>, result: ContractCreateResult) -> Box<vm::Exec> {
 		match result {
 			ContractCreateResult::Created(address, gas_left) => {
-				self.stack.push(address_to_u256(address));
+				self.stack.push((address_to_u256(address), Default::default()));
 				self.resume_result = Some(InstructionResult::UnusedGas(Cost::from_u256(gas_left).expect("Gas left cannot be greater.")));
 			},
 			ContractCreateResult::Reverted(gas_left, return_data) => {
-				self.stack.push(U256::zero());
+				self.stack.push((U256::zero(), Default::default()));
 				self.return_data = return_data;
 				self.resume_result = Some(InstructionResult::UnusedGas(Cost::from_u256(gas_left).expect("Gas left cannot be greater.")));
 			},
 			ContractCreateResult::Failed => {
-				self.stack.push(U256::zero());
+				self.stack.push((U256::zero(), Default::default()));
 				self.resume_result = Some(InstructionResult::Ok);
 			},
 		}
@@ -268,15 +278,15 @@ impl<Cost: 'static + CostType> vm::ResumeCreate for Interpreter<Cost> {
 	}
 }
 
-impl<Cost: CostType> Interpreter<Cost> {
+impl<Cost: CostType, Shadow: Default + Clone + Send> Interpreter<Cost, Shadow> {
 	/// Create a new `Interpreter` instance with shared cache.
-	pub fn new(mut params: ActionParams, cache: Arc<SharedCache>, schedule: &Schedule, depth: usize) -> Interpreter<Cost> {
+	pub fn new(mut params: ActionParams, cache: Arc<SharedCache>, schedule: &Schedule, depth: usize) -> Interpreter<Cost, Shadow> {
 		let reader = CodeReader::new(params.code.take().expect("VM always called with code; qed"));
 		let params = InterpreterParams::from(params);
 		let informant = informant::EvmInformant::new(depth);
 		let valid_jump_destinations = None;
 		let gasometer = Cost::from_u256(params.gas).ok().map(|gas| Gasometer::<Cost>::new(gas));
-		let stack = VecStack::with_capacity(schedule.stack_limit, U256::zero());
+		let stack = VecStack::with_capacity(schedule.stack_limit, (U256::zero(), Default::default()));
 
 		Interpreter {
 			cache, params, reader, informant,
@@ -343,7 +353,7 @@ impl<Cost: CostType> Interpreter<Cost> {
 				// Calculate gas cost
 				let requirements = self.gasometer.as_mut().expect(GASOMETER_PROOF).requirements(ext, instruction, info, &self.stack, self.mem.size())?;
 				if self.do_trace {
-					ext.trace_prepare_execute(self.reader.position - 1, opcode, requirements.gas_cost.as_u256(), Self::mem_written(instruction, &self.stack), Self::store_written(instruction, &self.stack));
+					// ext.trace_prepare_execute(self.reader.position - 1, opcode, requirements.gas_cost.as_u256(), Self::mem_written(instruction, &self.stack), Self::store_written(instruction, &self.stack));
 				}
 
 				self.gasometer.as_mut().expect(GASOMETER_PROOF).verify_gas(&requirements.gas_cost)?;
@@ -373,13 +383,13 @@ impl<Cost: CostType> Interpreter<Cost> {
 			self.gasometer.as_mut().expect(GASOMETER_PROOF).current_gas = self.gasometer.as_mut().expect(GASOMETER_PROOF).current_gas + *gas;
 		}
 
-		if self.do_trace {
+		/*if self.do_trace {
 			ext.trace_executed(
 				self.gasometer.as_mut().expect(GASOMETER_PROOF).current_gas.as_u256(),
 				self.stack.peek_top(self.last_stack_ret_len),
 				&self.mem,
 			);
-		}
+		}*/
 
 		// Advance
 		match result {
@@ -485,14 +495,14 @@ impl<Cost: CostType> Interpreter<Cost> {
 	) -> vm::Result<InstructionResult<Cost>> {
 		match instruction {
 			instructions::JUMP => {
-				let jump = self.stack.pop_back();
+				let jump = self.stack.pop_back().0;
 				return Ok(InstructionResult::JumpToPosition(
 					jump
 				));
 			},
 			instructions::JUMPI => {
-				let jump = self.stack.pop_back();
-				let condition = self.stack.pop_back();
+				let jump = self.stack.pop_back().0;
+				let condition = self.stack.pop_back().0;
 				if !condition.is_zero() {
 					return Ok(InstructionResult::JumpToPosition(
 						jump
@@ -503,12 +513,12 @@ impl<Cost: CostType> Interpreter<Cost> {
 				// ignore
 			},
 			instructions::CREATE | instructions::CREATE2 => {
-				let endowment = self.stack.pop_back();
-				let init_off = self.stack.pop_back();
-				let init_size = self.stack.pop_back();
+				let endowment = self.stack.pop_back().0;
+				let init_off = self.stack.pop_back().0;
+				let init_size = self.stack.pop_back().0;
 				let address_scheme = match instruction {
 					instructions::CREATE => CreateContractAddress::FromSenderAndNonce,
-					instructions::CREATE2 => CreateContractAddress::FromSenderSaltAndCodeHash(self.stack.pop_back().into()),
+					instructions::CREATE2 => CreateContractAddress::FromSenderSaltAndCodeHash(self.stack.pop_back().0.into()),
 					_ => unreachable!("instruction can only be CREATE/CREATE2 checked above; qed"),
 				};
 
@@ -523,7 +533,7 @@ impl<Cost: CostType> Interpreter<Cost> {
 
 				let can_create = ext.balance(&self.params.address)? >= endowment && ext.depth() < ext.schedule().max_depth;
 				if !can_create {
-					self.stack.push(U256::zero());
+					self.stack.push((U256::zero(), Default::default()));
 					return Ok(InstructionResult::UnusedGas(create_gas));
 				}
 
@@ -532,16 +542,16 @@ impl<Cost: CostType> Interpreter<Cost> {
 				let create_result = ext.create(&create_gas.as_u256(), &endowment, contract_code, address_scheme, true);
 				return match create_result {
 					Ok(ContractCreateResult::Created(address, gas_left)) => {
-						self.stack.push(address_to_u256(address));
+						self.stack.push((address_to_u256(address), Default::default()));
 						Ok(InstructionResult::UnusedGas(Cost::from_u256(gas_left).expect("Gas left cannot be greater.")))
 					},
 					Ok(ContractCreateResult::Reverted(gas_left, return_data)) => {
-						self.stack.push(U256::zero());
+						self.stack.push((U256::zero(), Default::default()));
 						self.return_data = return_data;
 						Ok(InstructionResult::UnusedGas(Cost::from_u256(gas_left).expect("Gas left cannot be greater.")))
 					},
 					Ok(ContractCreateResult::Failed) => {
-						self.stack.push(U256::zero());
+						self.stack.push((U256::zero(), Default::default()));
 						Ok(InstructionResult::Ok)
 					},
 					Err(trap) => {
@@ -554,7 +564,7 @@ impl<Cost: CostType> Interpreter<Cost> {
 
 				self.stack.pop_back();
 				let call_gas = provided.expect("`provided` comes through Self::exec from `Gasometer::get_gas_cost_mem`; `gas_gas_mem_cost` guarantees `Some` when instruction is `CALL`/`CALLCODE`/`DELEGATECALL`/`CREATE`; this is one of `CALL`/`CALLCODE`/`DELEGATECALL`; qed");
-				let code_address = self.stack.pop_back();
+				let code_address = self.stack.pop_back().0;
 				let code_address = u256_to_address(&code_address);
 
 				let value = if instruction == instructions::DELEGATECALL {
@@ -562,13 +572,13 @@ impl<Cost: CostType> Interpreter<Cost> {
 				} else if instruction == instructions::STATICCALL {
 					Some(U256::zero())
 				} else {
-					Some(self.stack.pop_back())
+					Some(self.stack.pop_back().0)
 				};
 
-				let in_off = self.stack.pop_back();
-				let in_size = self.stack.pop_back();
-				let out_off = self.stack.pop_back();
-				let out_size = self.stack.pop_back();
+				let in_off = self.stack.pop_back().0;
+				let in_size = self.stack.pop_back().0;
+				let out_off = self.stack.pop_back().0;
+				let out_size = self.stack.pop_back().0;
 
 				// Add stipend (only CALL|CALLCODE when value > 0)
 				let call_gas = call_gas + value.map_or_else(|| Cost::from(0), |val| match val.is_zero() {
@@ -599,7 +609,7 @@ impl<Cost: CostType> Interpreter<Cost> {
 
 				let can_call = has_balance && ext.depth() < ext.schedule().max_depth;
 				if !can_call {
-					self.stack.push(U256::zero());
+					self.stack.push((U256::zero(), Default::default()));
 					return Ok(InstructionResult::UnusedGas(call_gas));
 				}
 
@@ -615,8 +625,9 @@ impl<Cost: CostType> Interpreter<Cost> {
 						let output = self.mem.writeable_slice(out_off, out_size);
 						let len = cmp::min(output.len(), data.len());
 						(&mut output[..len]).copy_from_slice(&data[..len]);
+						// for i in 0..len { shadow_output[i] = Default::default(); }
 
-						self.stack.push(U256::one());
+						self.stack.push((U256::one(), Default::default()));
 						self.return_data = data;
 						Ok(InstructionResult::UnusedGas(Cost::from_u256(gas_left).expect("Gas left cannot be greater than current one")))
 					},
@@ -625,12 +636,12 @@ impl<Cost: CostType> Interpreter<Cost> {
 						let len = cmp::min(output.len(), data.len());
 						(&mut output[..len]).copy_from_slice(&data[..len]);
 
-						self.stack.push(U256::zero());
+						self.stack.push((U256::zero(), Default::default()));
 						self.return_data = data;
 						Ok(InstructionResult::UnusedGas(Cost::from_u256(gas_left).expect("Gas left cannot be greater than current one")))
 					},
 					Ok(MessageCallResult::Failed) => {
-						self.stack.push(U256::zero());
+						self.stack.push((U256::zero(), Default::default()));
 						Ok(InstructionResult::Ok)
 					},
 					Err(trap) => {
@@ -639,14 +650,14 @@ impl<Cost: CostType> Interpreter<Cost> {
 				};
 			},
 			instructions::RETURN => {
-				let init_off = self.stack.pop_back();
-				let init_size = self.stack.pop_back();
+				let init_off = self.stack.pop_back().0;
+				let init_size = self.stack.pop_back().0;
 
 				return Ok(InstructionResult::StopExecutionNeedsReturn {gas: gas, init_off: init_off, init_size: init_size, apply: true})
 			},
 			instructions::REVERT => {
-				let init_off = self.stack.pop_back();
-				let init_size = self.stack.pop_back();
+				let init_off = self.stack.pop_back().0;
+				let init_size = self.stack.pop_back().0;
 
 				return Ok(InstructionResult::StopExecutionNeedsReturn {gas: gas, init_off: init_off, init_size: init_size, apply: false})
 			},
@@ -654,17 +665,18 @@ impl<Cost: CostType> Interpreter<Cost> {
 				return Ok(InstructionResult::StopExecution);
 			},
 			instructions::SUICIDE => {
-				let address = self.stack.pop_back();
+				let address = self.stack.pop_back().0;
 				ext.suicide(&u256_to_address(&address))?;
 				return Ok(InstructionResult::StopExecution);
 			},
 			instructions::LOG0 | instructions::LOG1 | instructions::LOG2 | instructions::LOG3 | instructions::LOG4 => {
 				let no_of_topics = instruction.log_topics().expect("log_topics always return some for LOG* instructions; qed");
 
-				let offset = self.stack.pop_back();
-				let size = self.stack.pop_back();
+				let offset = self.stack.pop_back().0;
+				let size = self.stack.pop_back().0;
 				let topics = self.stack.pop_n(no_of_topics)
 					.iter()
+					.map(|(v, s)| v)
 					.map(H256::from)
 					.collect();
 				ext.log(topics, self.mem.read_slice(offset, size))?;
@@ -679,39 +691,41 @@ impl<Cost: CostType> Interpreter<Cost> {
 			instructions::PUSH29 | instructions::PUSH30 | instructions::PUSH31 | instructions::PUSH32 => {
 				let bytes = instruction.push_bytes().expect("push_bytes always return some for PUSH* instructions");
 				let val = self.reader.read(bytes);
-				self.stack.push(val);
+				self.stack.push((val, Default::default()));
 			},
 			instructions::MLOAD => {
-				let word = self.mem.read(self.stack.pop_back());
-				self.stack.push(U256::from(word));
+				let word = self.mem.read(self.stack.pop_back().0);
+				self.stack.push((word, Default::default()));
 			},
 			instructions::MSTORE => {
-				let offset = self.stack.pop_back();
+				let offset = self.stack.pop_back().0;
 				let word = self.stack.pop_back();
-				Memory::write(&mut self.mem, offset, word);
+				Memory::write(&mut self.mem, offset, word.0);
+				// Memory::write(&mut self.shadow_mem, offset, word.1);
 			},
 			instructions::MSTORE8 => {
-				let offset = self.stack.pop_back();
+				let offset = self.stack.pop_back().0;
 				let byte = self.stack.pop_back();
-				self.mem.write_byte(offset, byte);
+				self.mem.write_byte(offset, byte.0);
+				// self.shadow_mem.write_byte(offset, byte.1);
 			},
 			instructions::MSIZE => {
-				self.stack.push(U256::from(self.mem.size()));
+				self.stack.push((U256::from(self.mem.size()), Default::default()));
 			},
 			instructions::SHA3 => {
-				let offset = self.stack.pop_back();
-				let size = self.stack.pop_back();
+				let offset = self.stack.pop_back().0;
+				let size = self.stack.pop_back().0;
 				let k = keccak(self.mem.read_slice(offset, size));
-				self.stack.push(U256::from(&*k));
+				self.stack.push((U256::from(&*k), Default::default()));
 			},
 			instructions::SLOAD => {
-				let key = H256::from(&self.stack.pop_back());
+				let key = H256::from(&self.stack.pop_back().0);
 				let word = U256::from(&*ext.storage_at(&key)?);
-				self.stack.push(word);
+				self.stack.push((word, Default::default()));
 			},
 			instructions::SSTORE => {
-				let address = H256::from(&self.stack.pop_back());
-				let val = self.stack.pop_back();
+				let address = H256::from(&self.stack.pop_back().0);
+				let val = self.stack.pop_back().0;
 
 				let current_val = U256::from(&*ext.storage_at(&address)?);
 				// Increase refund for clear
@@ -727,32 +741,32 @@ impl<Cost: CostType> Interpreter<Cost> {
 				ext.set_storage(address, H256::from(&val))?;
 			},
 			instructions::PC => {
-				self.stack.push(U256::from(self.reader.position - 1));
+				self.stack.push((U256::from(self.reader.position - 1), Default::default()));
 			},
 			instructions::GAS => {
-				self.stack.push(gas.as_u256());
+				self.stack.push((gas.as_u256(), Default::default()));
 			},
 			instructions::ADDRESS => {
-				self.stack.push(address_to_u256(self.params.address.clone()));
+				self.stack.push((address_to_u256(self.params.address.clone()), Default::default()));
 			},
 			instructions::ORIGIN => {
-				self.stack.push(address_to_u256(self.params.origin.clone()));
+				self.stack.push((address_to_u256(self.params.origin.clone()), Default::default()))
 			},
 			instructions::BALANCE => {
-				let address = u256_to_address(&self.stack.pop_back());
+				let address = u256_to_address(&self.stack.pop_back().0);
 				let balance = ext.balance(&address)?;
-				self.stack.push(balance);
+				self.stack.push((balance, Default::default()));
 			},
 			instructions::CALLER => {
-				self.stack.push(address_to_u256(self.params.sender.clone()));
+				self.stack.push((address_to_u256(self.params.sender.clone()), Default::default()));
 			},
 			instructions::CALLVALUE => {
-				self.stack.push(match self.params.value {
+				self.stack.push((match self.params.value {
 					ActionValue::Transfer(val) | ActionValue::Apparent(val) => val
-				});
+				}, Default::default()));
 			},
 			instructions::CALLDATALOAD => {
-				let big_id = self.stack.pop_back();
+				let big_id = self.stack.pop_back().0;
 				let id = big_id.low_u64() as usize;
 				let max = id.wrapping_add(32);
 				if let Some(data) = self.params.data.as_ref() {
@@ -760,32 +774,33 @@ impl<Cost: CostType> Interpreter<Cost> {
 					if id < bound && big_id < U256::from(data.len()) {
 						let mut v = [0u8; 32];
 						v[0..bound-id].clone_from_slice(&data[id..bound]);
-						self.stack.push(U256::from(&v[..]))
+						self.stack.push((U256::from(&v[..]), Default::default()))
 					} else {
-						self.stack.push(U256::zero())
+						self.stack.push((U256::zero(), Default::default()))
 					}
 				} else {
-					self.stack.push(U256::zero())
+					self.stack.push((U256::zero(), Default::default()))
 				}
 			},
 			instructions::CALLDATASIZE => {
-				self.stack.push(U256::from(self.params.data.as_ref().map_or(0, |l| l.len())));
+				let size = U256::from(self.params.data.as_ref().map_or(0, Vec::len));
+				self.stack.push((size, Default::default()));
 			},
 			instructions::CODESIZE => {
-				self.stack.push(U256::from(self.reader.len()));
+				self.stack.push((U256::from(self.reader.len()), Default::default()));
 			},
 			instructions::RETURNDATASIZE => {
-				self.stack.push(U256::from(self.return_data.len()))
+				self.stack.push((U256::from(self.return_data.len()), Default::default()))
 			},
 			instructions::EXTCODESIZE => {
-				let address = u256_to_address(&self.stack.pop_back());
+				let address = u256_to_address(&self.stack.pop_back().0);
 				let len = ext.extcodesize(&address)?.unwrap_or(0);
-				self.stack.push(U256::from(len));
+				self.stack.push((U256::from(len), Default::default()));
 			},
 			instructions::EXTCODEHASH => {
-				let address = u256_to_address(&self.stack.pop_back());
+				let address = u256_to_address(&self.stack.pop_back().0);
 				let hash = ext.extcodehash(&address)?.unwrap_or_else(H256::zero);
-				self.stack.push(U256::from(hash));
+				self.stack.push((U256::from(hash), Default::default()));
 			},
 			instructions::CALLDATACOPY => {
 				Self::copy_data_to_memory(&mut self.mem, &mut self.stack, &self.params.data.as_ref().map_or_else(|| &[] as &[u8], |d| &*d as &[u8]));
@@ -805,7 +820,7 @@ impl<Cost: CostType> Interpreter<Cost> {
 				Self::copy_data_to_memory(&mut self.mem, &mut self.stack, &self.reader.code);
 			},
 			instructions::EXTCODECOPY => {
-				let address = u256_to_address(&self.stack.pop_back());
+				let address = u256_to_address(&self.stack.pop_back().0);
 				let code = ext.extcode(&address)?;
 				Self::copy_data_to_memory(
 					&mut self.mem,
@@ -814,27 +829,32 @@ impl<Cost: CostType> Interpreter<Cost> {
 				);
 			},
 			instructions::GASPRICE => {
-				self.stack.push(self.params.gas_price.clone());
+				self.stack.push((self.params.gas_price.clone(), Default::default()));
 			},
 			instructions::BLOCKHASH => {
-				let block_number = self.stack.pop_back();
+				let block_number = self.stack.pop_back().0;
 				let block_hash = ext.blockhash(&block_number);
-				self.stack.push(U256::from(&*block_hash));
+				self.stack.push((U256::from(&*block_hash), Default::default()));
 			},
 			instructions::COINBASE => {
-				self.stack.push(address_to_u256(ext.env_info().author.clone()));
+				let coinbase = address_to_u256(ext.env_info().author.clone());
+				self.stack.push((coinbase, Default::default()));
 			},
 			instructions::TIMESTAMP => {
-				self.stack.push(U256::from(ext.env_info().timestamp));
+				let timestamp = U256::from(ext.env_info().timestamp);
+				self.stack.push((timestamp, Default::default()));
 			},
 			instructions::NUMBER => {
-				self.stack.push(U256::from(ext.env_info().number));
+				let number = U256::from(ext.env_info().number);
+				self.stack.push((number, Default::default()));
 			},
 			instructions::DIFFICULTY => {
-				self.stack.push(ext.env_info().difficulty.clone());
+				let difficulty = ext.env_info().difficulty.clone();
+				self.stack.push((difficulty, Default::default()));
 			},
 			instructions::GASLIMIT => {
-				self.stack.push(ext.env_info().gas_limit.clone());
+				let gaslimit = ext.env_info().gas_limit.clone();
+				self.stack.push((gaslimit, Default::default()));
 			},
 
 			// Stack instructions
@@ -860,155 +880,170 @@ impl<Cost: CostType> Interpreter<Cost> {
 			instructions::ADD => {
 				let a = self.stack.pop_back();
 				let b = self.stack.pop_back();
-				self.stack.push(a.overflowing_add(b).0);
+				let res = a.0.overflowing_add(b.0).0;
+				self.stack.push((res, a.1));
 			},
 			instructions::MUL => {
 				let a = self.stack.pop_back();
 				let b = self.stack.pop_back();
-				self.stack.push(a.overflowing_mul(b).0);
+				let res = a.0.overflowing_mul(b.0).0;
+				self.stack.push((res, a.1));
 			},
 			instructions::SUB => {
 				let a = self.stack.pop_back();
 				let b = self.stack.pop_back();
-				self.stack.push(a.overflowing_sub(b).0);
+				let res = a.0.overflowing_sub(b.0).0;
+				self.stack.push((res, a.1));
 			},
 			instructions::DIV => {
 				let a = self.stack.pop_back();
 				let b = self.stack.pop_back();
-				self.stack.push(if !b.is_zero() {
-					match b {
-						ONE => a,
-						TWO => a >> 1,
-						TWO_POW_5 => a >> 5,
-						TWO_POW_8 => a >> 8,
-						TWO_POW_16 => a >> 16,
-						TWO_POW_24 => a >> 24,
-						TWO_POW_64 => a >> 64,
-						TWO_POW_96 => a >> 96,
-						TWO_POW_224 => a >> 224,
-						TWO_POW_248 => a >> 248,
-						_ => a / b,
+				let res = if !b.0.is_zero() {
+					match b.0 {
+						ONE => a.0,
+						TWO => a.0 >> 1,
+						TWO_POW_5 => a.0 >> 5,
+						TWO_POW_8 => a.0 >> 8,
+						TWO_POW_16 => a.0 >> 16,
+						TWO_POW_24 => a.0 >> 24,
+						TWO_POW_64 => a.0 >> 64,
+						TWO_POW_96 => a.0 >> 96,
+						TWO_POW_224 => a.0 >> 224,
+						TWO_POW_248 => a.0 >> 248,
+						_ => a.0 / b.0,
 					}
 				} else {
 					U256::zero()
-				});
+				};
+				self.stack.push((res, a.1));
 			},
 			instructions::MOD => {
 				let a = self.stack.pop_back();
 				let b = self.stack.pop_back();
-				self.stack.push(if !b.is_zero() {
-					a % b
+				let res = if !b.0.is_zero() {
+					a.0 % b.0
 				} else {
 					U256::zero()
-				});
+				};
+				self.stack.push((res, a.1));
 			},
 			instructions::SDIV => {
-				let (a, sign_a) = get_and_reset_sign(self.stack.pop_back());
-				let (b, sign_b) = get_and_reset_sign(self.stack.pop_back());
+				let (a, sign_a) = get_and_reset_sign(self.stack.pop_back().0);
+				let (b, sign_b) = get_and_reset_sign(self.stack.pop_back().0);
 
 				// -2^255
 				let min = (U256::one() << 255) - U256::one();
-				self.stack.push(if b.is_zero() {
+				let res = if b.is_zero() {
 					U256::zero()
 				} else if a == min && b == !U256::zero() {
 					min
 				} else {
 					let c = a / b;
 					set_sign(c, sign_a ^ sign_b)
-				});
+				};
+				self.stack.push((res, Default::default()));
 			},
 			instructions::SMOD => {
-				let ua = self.stack.pop_back();
-				let ub = self.stack.pop_back();
+				let ua = self.stack.pop_back().0;
+				let ub = self.stack.pop_back().0;
 				let (a, sign_a) = get_and_reset_sign(ua);
 				let b = get_and_reset_sign(ub).0;
-
-				self.stack.push(if !b.is_zero() {
+				let res = if !b.is_zero() {
 					let c = a % b;
 					set_sign(c, sign_a)
 				} else {
 					U256::zero()
-				});
+				};
+
+				self.stack.push((res, Default::default()));
 			},
 			instructions::EXP => {
-				let base = self.stack.pop_back();
-				let expon = self.stack.pop_back();
+				let base = self.stack.pop_back().0;
+				let expon = self.stack.pop_back().0;
 				let res = base.overflowing_pow(expon).0;
-				self.stack.push(res);
+				self.stack.push((res, Default::default()));
 			},
 			instructions::NOT => {
 				let a = self.stack.pop_back();
-				self.stack.push(!a);
+				self.stack.push((!a.0, a.1));
 			},
 			instructions::LT => {
 				let a = self.stack.pop_back();
 				let b = self.stack.pop_back();
-				self.stack.push(Self::bool_to_u256(a < b));
+				let res = Self::bool_to_u256(a.0 < b.0);
+				self.stack.push((res, a.1));
 			},
 			instructions::SLT => {
-				let (a, neg_a) = get_and_reset_sign(self.stack.pop_back());
-				let (b, neg_b) = get_and_reset_sign(self.stack.pop_back());
+				let (a, neg_a) = get_and_reset_sign(self.stack.pop_back().0);
+				let (b, neg_b) = get_and_reset_sign(self.stack.pop_back().0);
 
 				let is_positive_lt = a < b && !(neg_a | neg_b);
 				let is_negative_lt = a > b && (neg_a & neg_b);
 				let has_different_signs = neg_a && !neg_b;
 
-				self.stack.push(Self::bool_to_u256(is_positive_lt | is_negative_lt | has_different_signs));
+				let res = Self::bool_to_u256(is_positive_lt | is_negative_lt | has_different_signs);
+				self.stack.push((res, Default::default()));
 			},
 			instructions::GT => {
 				let a = self.stack.pop_back();
 				let b = self.stack.pop_back();
-				self.stack.push(Self::bool_to_u256(a > b));
+				let res = Self::bool_to_u256(a.0 > b.0);
+				self.stack.push((res, Default::default()));
 			},
 			instructions::SGT => {
-				let (a, neg_a) = get_and_reset_sign(self.stack.pop_back());
-				let (b, neg_b) = get_and_reset_sign(self.stack.pop_back());
+				let (a, neg_a) = get_and_reset_sign(self.stack.pop_back().0);
+				let (b, neg_b) = get_and_reset_sign(self.stack.pop_back().0);
 
 				let is_positive_gt = a > b && !(neg_a | neg_b);
 				let is_negative_gt = a < b && (neg_a & neg_b);
 				let has_different_signs = !neg_a && neg_b;
 
-				self.stack.push(Self::bool_to_u256(is_positive_gt | is_negative_gt | has_different_signs));
+				let res = Self::bool_to_u256(is_positive_gt | is_negative_gt | has_different_signs);
+				self.stack.push((res, Default::default()));
 			},
 			instructions::EQ => {
 				let a = self.stack.pop_back();
 				let b = self.stack.pop_back();
-				self.stack.push(Self::bool_to_u256(a == b));
+				let res = Self::bool_to_u256(a.0 == b.0);
+				self.stack.push((res, a.1));
 			},
 			instructions::ISZERO => {
 				let a = self.stack.pop_back();
-				self.stack.push(Self::bool_to_u256(a.is_zero()));
+				let res = Self::bool_to_u256(a.0.is_zero());
+				self.stack.push((res, a.1));
 			},
 			instructions::AND => {
 				let a = self.stack.pop_back();
 				let b = self.stack.pop_back();
-				self.stack.push(a & b);
+				let res = a.0 & b.0;
+				self.stack.push((res, a.1));
 			},
 			instructions::OR => {
 				let a = self.stack.pop_back();
 				let b = self.stack.pop_back();
-				self.stack.push(a | b);
+				let res = a.0 | b.0;
+				self.stack.push((res, a.1));
 			},
 			instructions::XOR => {
 				let a = self.stack.pop_back();
 				let b = self.stack.pop_back();
-				self.stack.push(a ^ b);
+				let res = a.0 ^ b.0;
+				self.stack.push((res, a.1));
 			},
 			instructions::BYTE => {
-				let word = self.stack.pop_back();
-				let val = self.stack.pop_back();
+				let word = self.stack.pop_back().0;
+				let val = self.stack.pop_back().0;
 				let byte = match word < U256::from(32) {
 					true => (val >> (8 * (31 - word.low_u64() as usize))) & U256::from(0xff),
 					false => U256::zero()
 				};
-				self.stack.push(byte);
+				self.stack.push((byte, Default::default()));
 			},
 			instructions::ADDMOD => {
-				let a = self.stack.pop_back();
-				let b = self.stack.pop_back();
-				let c = self.stack.pop_back();
-
-				self.stack.push(if !c.is_zero() {
+				let a = self.stack.pop_back().0;
+				let b = self.stack.pop_back().0;
+				let c = self.stack.pop_back().0;
+				let res = if !c.is_zero() {
 					// upcast to 512
 					let a5 = U512::from(a);
 					let res = a5.overflowing_add(U512::from(b)).0;
@@ -1016,35 +1051,40 @@ impl<Cost: CostType> Interpreter<Cost> {
 					U256::from(x)
 				} else {
 					U256::zero()
-				});
+				};
+
+				self.stack.push((res, Default::default()));
 			},
 			instructions::MULMOD => {
-				let a = self.stack.pop_back();
-				let b = self.stack.pop_back();
-				let c = self.stack.pop_back();
-
-				self.stack.push(if !c.is_zero() {
+				let a = self.stack.pop_back().0;
+				let b = self.stack.pop_back().0;
+				let c = self.stack.pop_back().0;
+				let res = if !c.is_zero() {
 					let a5 = U512::from(a);
 					let res = a5.overflowing_mul(U512::from(b)).0;
 					let x = res % U512::from(c);
 					U256::from(x)
 				} else {
 					U256::zero()
-				});
+				};
+
+				self.stack.push((res, Default::default()));
 			},
 			instructions::SIGNEXTEND => {
 				let bit = self.stack.pop_back();
-				if bit < U256::from(32) {
-					let number = self.stack.pop_back();
-					let bit_position = (bit.low_u64() * 8 + 7) as usize;
+				let s = bit.1;
+				if bit.0 < U256::from(32) {
+					let number = self.stack.pop_back().0;
+					let bit_position = (bit.0.low_u64() * 8 + 7) as usize;
 
 					let bit = number.bit(bit_position);
 					let mask = (U256::one() << bit_position) - U256::one();
-					self.stack.push(if bit {
+					let res = if bit {
 						number | !mask
 					} else {
 						number & mask
-					});
+					};
+					self.stack.push((res, s));
 				}
 			},
 			instructions::SHL => {
@@ -1053,12 +1093,12 @@ impl<Cost: CostType> Interpreter<Cost> {
 				let shift = self.stack.pop_back();
 				let value = self.stack.pop_back();
 
-				let result = if shift >= CONST_256 {
+				let result = if shift.0 >= CONST_256 {
 					U256::zero()
 				} else {
-					value << (shift.as_u32() as usize)
+					value.0 << (shift.0.as_u32() as usize)
 				};
-				self.stack.push(result);
+				self.stack.push((result, value.1));
 			},
 			instructions::SHR => {
 				const CONST_256: U256 = U256([256, 0, 0, 0]);
@@ -1066,12 +1106,12 @@ impl<Cost: CostType> Interpreter<Cost> {
 				let shift = self.stack.pop_back();
 				let value = self.stack.pop_back();
 
-				let result = if shift >= CONST_256 {
+				let result = if shift.0 >= CONST_256 {
 					U256::zero()
 				} else {
-					value >> (shift.as_u32() as usize)
+					value.0 >> (shift.0.as_u32() as usize)
 				};
-				self.stack.push(result);
+				self.stack.push((result, value.1));
 			},
 			instructions::SAR => {
 				// We cannot use get_and_reset_sign/set_sign here, because the rounding looks different.
@@ -1081,23 +1121,23 @@ impl<Cost: CostType> Interpreter<Cost> {
 
 				let shift = self.stack.pop_back();
 				let value = self.stack.pop_back();
-				let sign = value & CONST_HIBIT != U256::zero();
+				let sign = value.0 & CONST_HIBIT != U256::zero();
 
-				let result = if shift >= CONST_256 {
+				let result = if shift.0 >= CONST_256 {
 					if sign {
 						U256::max_value()
 					} else {
 						U256::zero()
 					}
 				} else {
-					let shift = shift.as_u32() as usize;
-					let mut shifted = value >> shift;
+					let shift = shift.0.as_u32() as usize;
+					let mut shifted = value.0 >> shift;
 					if sign {
 						shifted = shifted | (U256::max_value() << (256 - shift));
 					}
 					shifted
 				};
-				self.stack.push(result);
+				self.stack.push((result, value.1));
 			},
 		};
 		Ok(InstructionResult::Ok)
