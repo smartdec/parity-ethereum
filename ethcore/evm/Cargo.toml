@@ -15,6 +15,7 @@ keccak-hash = "0.1"
 parking_lot = "0.6"
 array-init = "0.0.4"
 memory-cache = { path = "../../util/memory_cache" }
+shadow-mem = { path = "../shadowmem" }
 
 [dev-dependencies]
 rustc-hex = "1.0"

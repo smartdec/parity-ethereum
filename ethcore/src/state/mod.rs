@@ -313,7 +313,7 @@ pub struct State<B> {
 	// The original account is preserved in
 	checkpoints: RefCell<Vec<HashMap<Address, Option<AccountEntry>>>>,
 	account_start_nonce: U256,
-	factories: Factаories,
+	factories: Factories,
 }
 
 #[derive(Copy, Clone)]
@@ -867,7 +867,7 @@ impl<B: Backend> State<B> {
 	}
 
 	/// Commits our cached account changes into the trie.
-	pub fn  commit(&mut self) -> Result<(), Error> {
+	pub fn commit(&mut self) -> Result<(), Error> {
 		assert!(self.checkpoints.borrow().is_empty());
 		// first, commit the sub trees.
 		let mut accounts = self.cache.borrow_mut();

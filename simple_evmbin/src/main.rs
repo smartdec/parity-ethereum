@@ -62,11 +62,11 @@ mod display;
 use info::Informant;
 
 const USAGE: &'static str = r#"
-EVM implementation for Parity.
+Simplified EVM implementation for Parity.
   Copyright 2015-2018 Parity Technologies (UK) Ltd.
 
 Usage:
-    parity-patched-evm [options]
+    parity-patched-evm [options] [array of json transactions]
     parity-patched-evm [-h | --help]
 
 State test options:
