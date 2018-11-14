@@ -136,4 +136,5 @@ members = [
 	"util/keccak-hasher",
 	"util/patricia-trie-ethereum",
 	"util/fastmap",
+	"simple_evmbin"
 ]
