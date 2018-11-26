@@ -174,7 +174,7 @@ impl From<vm::Error> for InterpreterResult {
 	}
 }
 
-/// Intepreter EVM implementation
+/// Interpreter EVM implementation
 pub struct Interpreter<Cost: CostType, Shadow: shadow_mem::Shadow> {
 	mem: Vec<u8>,
 	shadow_mem: Vec<Shadow>,
@@ -196,7 +196,7 @@ pub struct Interpreter<Cost: CostType, Shadow: shadow_mem::Shadow> {
 
 impl<Cost, Shadow> vm::Exec for Interpreter<Cost, Shadow>
 	where Cost: 'static + CostType,
-		  Shadow: shadow_mem::Shadow
+		  Shadow: 'static + shadow_mem::Shadow
 {
 	fn exec(mut self: Box<Self>, ext: &mut vm::Ext) -> vm::ExecTrapResult<GasLeft> {
 		loop {
@@ -220,7 +220,7 @@ impl<Cost, Shadow> vm::Exec for Interpreter<Cost, Shadow>
 
 impl<Cost, Shadow> vm::ResumeCall for Interpreter<Cost, Shadow>
 	where Cost: 'static + CostType,
-		  Shadow: shadow_mem::Shadow
+		  Shadow: 'static + shadow_mem::Shadow
 {
 	fn resume_call(mut self: Box<Self>, result: MessageCallResult) -> Box<vm::Exec> {
 		{
@@ -258,7 +258,7 @@ impl<Cost, Shadow> vm::ResumeCall for Interpreter<Cost, Shadow>
 
 impl<Cost, Shadow> vm::ResumeCreate for Interpreter<Cost, Shadow>
 	where Cost: 'static + CostType,
-		  Shadow: shadow_mem::Shadow
+		  Shadow: 'static + shadow_mem::Shadow
 {
 	fn resume_create(mut self: Box<Self>, result: ContractCreateResult) -> Box<vm::Exec> {
 		match result {
@@ -700,7 +700,7 @@ impl<Cost: CostType, Shadow: shadow_mem::Shadow> Interpreter<Cost, Shadow> {
 			instructions::MLOAD => {
 				// TODO Am I right that values from memory can't be constants?
 				let word = self.mem.read(self.stack.pop_back().0);
-				self.stack.push((word.clone(), Shadow::for_no_const_word(word.clone())));
+				self.stack.push((word.clone(), Shadow::for_non_const_word(word.clone())));
 			},
 			instructions::MSTORE => {
 				let offset = self.stack.pop_back().0;
@@ -753,10 +753,14 @@ impl<Cost: CostType, Shadow: shadow_mem::Shadow> Interpreter<Cost, Shadow> {
 				self.stack.push((*pos, Shadow::for_env_variable(*pos)));
 			},
 			instructions::GAS => {
-				self.stack.push((gas.as_u256(), Shadow::for_env_variable(gas.as_u256)));
+				let gas = gas.as_u256();
+				let shadow = Shadow::for_env_variable(gas);
+				self.stack.push((gas, shadow));
 			},
 			instructions::ADDRESS => {
-				self.stack.push((address_to_u256(self.params.address.clone()), Shadow::for_env_variable(self.params.address.clone())));
+				let address = self.params.address.clone();
+				let shadow = Shadow::for_env_variable(address);
+				self.stack.push((address_to_u256(address), shadow));
 			},
 			instructions::ORIGIN => {
 				self.stack.push((address_to_u256(self.params.origin.clone()), Shadow::for_env_variable(self.params.origin.clone())))
@@ -768,13 +772,14 @@ impl<Cost: CostType, Shadow: shadow_mem::Shadow> Interpreter<Cost, Shadow> {
 			},
 			instructions::CALLER => {
 				let address = self.params.sender.clone();
-				self.stack.push((address_to_u256(address.clone()), Shadow::for_no_const_address(address.clone())));
+				self.stack.push((address_to_u256(address.clone()), Shadow::for_non_const_address(address.clone())));
 			},
 			instructions::CALLVALUE => {
 				let val = match self.params.value {
 					ActionValue::Transfer(val) | ActionValue::Apparent(val) => val
 				};
-				self.stack.push((val.clone(), Shadow::for_calldata(Bytes::from(val.clone())));
+				let shadow = Shadow::for_calldata(Bytes::from(val.clone()));
+				self.stack.push((val.clone(), shadow));
 			},
 			instructions::CALLDATALOAD => {
 				let big_id = self.stack.pop_back().0;
@@ -801,12 +806,13 @@ impl<Cost: CostType, Shadow: shadow_mem::Shadow> Interpreter<Cost, Shadow> {
 				self.stack.push((U256::from(self.reader.len()), Shadow::for_env_variable(U256::from(self.reader.len()))));
 			},
 			instructions::RETURNDATASIZE => {
-				self.stack.push((U256::from(self.return_data.len()), Shadow::for_no_const_word(U256::from(self.return_data.len()))))
+				self.stack.push((U256::from(self.return_data.len()), Shadow::for_non_const_word(U256::from(self.return_data.len()))))
 			},
 			instructions::EXTCODESIZE => {
 				let address = u256_to_address(&self.stack.pop_back().0);
 				let len = ext.extcodesize(&address)?.unwrap_or(0);
-				self.stack.push((U256::from(len), Shadow::for_external_code(Bytes::from(len))));
+				let shadow = Shadow::for_external_code(Bytes::from(len));
+				self.stack.push((U256::from(len), shadow));
 			},
 			instructions::EXTCODEHASH => {
 				let address = u256_to_address(&self.stack.pop_back().0);
