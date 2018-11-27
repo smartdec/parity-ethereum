@@ -16,6 +16,8 @@
 
 //! VM errors module
 
+extern crate shadow_mem;
+
 use ::{ResumeCall, ResumeCreate};
 use ethereum_types::Address;
 use action_params::ActionParams;
@@ -119,5 +121,5 @@ impl fmt::Display for Error {
 pub type Result<T> = ::std::result::Result<T, Error>;
 pub type TrapResult<T, Call, Create> = ::std::result::Result<Result<T>, TrapError<Call, Create>>;
 
-pub type ExecTrapResult<T> = TrapResult<T, Box<ResumeCall>, Box<ResumeCreate>>;
-pub type ExecTrapError = TrapError<Box<ResumeCall>, Box<ResumeCreate>>;
+pub type ExecTrapResult<T, S: shadow_mem::Shadow> = TrapResult<T, Box<ResumeCall<S>>, Box<ResumeCreate<S>>>;
+pub type ExecTrapError<S: shadow_mem::Shadow> = TrapError<Box<ResumeCall<S>>, Box<ResumeCreate<S>>>;

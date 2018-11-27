@@ -14,6 +14,8 @@
 // You should have received a copy of the GNU General Public License
 // along with Parity.  If not, see <http://www.gnu.org/licenses/>.
 
+extern crate shadow_mem;
+
 use std::cmp;
 use ethereum_types::{U256, H256};
 use super::u256_to_address;
@@ -104,9 +106,9 @@ impl<Gas: evm::CostType> Gasometer<Gas> {
 	/// We guarantee that the final element of the returned tuple (`provided`) will be `Some`
 	/// iff the `instruction` is one of `CREATE`, or any of the `CALL` variants. In this case,
 	/// it will be the amount of gas that the current context provides to the child context.
-	pub fn requirements<Shadow: Default + Clone>(
+	pub fn requirements<Shadow: shadow_mem::Shadow>(
 		&mut self,
-		ext: &vm::Ext,
+		ext: &vm::Ext<Shadow>,
 		instruction: Instruction,
 		info: &InstructionInfo,
 		stack: &Stack<(U256, Shadow)>,
@@ -402,7 +404,7 @@ fn calculate_eip1283_sstore_gas<Gas: evm::CostType>(schedule: &Schedule, origina
 	)
 }
 
-pub fn handle_eip1283_sstore_clears_refund(ext: &mut vm::Ext, original: &U256, current: &U256, new: &U256) {
+pub fn handle_eip1283_sstore_clears_refund<T: shadow_mem::Shadow>(ext: &mut vm::Ext<T>, original: &U256, current: &U256, new: &U256) {
 	let sstore_clears_schedule = ext.schedule().sstore_refund_gas;
 
 	if current == new {

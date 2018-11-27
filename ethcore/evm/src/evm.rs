@@ -16,6 +16,8 @@
 
 //! Evm interface.
 
+extern crate shadow_mem;
+
 use std::{ops, cmp, fmt};
 use ethereum_types::{U128, U256, U512};
 use vm::{Ext, Result, ReturnData, GasLeft, Error};
@@ -36,13 +38,13 @@ pub struct FinalizationResult {
 ///
 /// In practice, this is just used to define an inherent impl on
 /// `Reult<GasLeft<'a>>`.
-pub trait Finalize {
+pub trait Finalize<T: shadow_mem::Shadow> {
 	/// Consume the externalities, call return if necessary, and produce call result.
-	fn finalize<E: Ext>(self, ext: E) -> Result<FinalizationResult>;
+	fn finalize<E: Ext<T>>(self, ext: E) -> Result<FinalizationResult>;
 }
 
-impl Finalize for Result<GasLeft> {
-	fn finalize<E: Ext>(self, ext: E) -> Result<FinalizationResult> {
+impl<T: shadow_mem::Shadow> Finalize<T> for Result<GasLeft> {
+	fn finalize<E: Ext<T>>(self, ext: E) -> Result<FinalizationResult> {
 		match self {
 			Ok(GasLeft::Known(gas_left)) => Ok(FinalizationResult { gas_left: gas_left, apply_state: true, return_data: ReturnData::empty() }),
 			Ok(GasLeft::NeedsReturn { gas_left, data, apply_state }) => ext.ret(&gas_left, &data, apply_state).map(|gas_left| FinalizationResult {
@@ -55,8 +57,8 @@ impl Finalize for Result<GasLeft> {
 	}
 }
 
-impl Finalize for Error {
-	fn finalize<E: Ext>(self, _ext: E) -> Result<FinalizationResult> {
+impl<T: shadow_mem::Shadow> Finalize<T> for Error {
+	fn finalize<E: Ext<T>>(self, _ext: E) -> Result<FinalizationResult> {
 		Err(self)
 	}
 }

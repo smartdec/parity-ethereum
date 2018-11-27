@@ -24,6 +24,7 @@ extern crate rlp;
 extern crate keccak_hash as hash;
 extern crate patricia_trie_ethereum as ethtrie;
 extern crate patricia_trie as trie;
+extern crate shadow_mem;
 
 mod action_params;
 mod call_type;
@@ -44,21 +45,21 @@ pub use return_data::{ReturnData, GasLeft};
 pub use error::{Error, Result, TrapResult, TrapError, TrapKind, ExecTrapResult, ExecTrapError};
 
 /// Virtual Machine interface
-pub trait Exec: Send {
+pub trait Exec<T: shadow_mem::Shadow>: Send {
 	/// This function should be used to execute transaction.
 	/// It returns either an error, a known amount of gas left, or parameters to be used
 	/// to compute the final gas left.
-	fn exec(self: Box<Self>, ext: &mut Ext) -> ExecTrapResult<GasLeft>;
+	fn exec(self: Box<Self>, ext: &mut Ext<T>) -> ExecTrapResult<GasLeft, T>;
 }
 
 /// Resume call interface
-pub trait ResumeCall: Send {
+pub trait ResumeCall<T: shadow_mem::Shadow>: Send {
 	/// Resume an execution for call, returns back the Vm interface.
-	fn resume_call(self: Box<Self>, result: MessageCallResult) -> Box<Exec>;
+	fn resume_call(self: Box<Self>, result: MessageCallResult<T>) -> Box<Exec<T>>;
 }
 
 /// Resume create interface
-pub trait ResumeCreate: Send {
+pub trait ResumeCreate<T: shadow_mem::Shadow>: Send {
 	/// Resume an execution from create, returns back the Vm interface.
-	fn resume_create(self: Box<Self>, result: ContractCreateResult) -> Box<Exec>;
+	fn resume_create(self: Box<Self>, result: ContractCreateResult<T>) -> Box<Exec<T>>;
 }

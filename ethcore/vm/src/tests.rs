@@ -14,6 +14,8 @@
 // You should have received a copy of the GNU General Public License
 // along with Parity.  If not, see <http://www.gnu.org/licenses/>.
 
+extern crate shadow_mem;
+
 use std::sync::Arc;
 use std::collections::{HashMap, HashSet};
 
@@ -105,7 +107,7 @@ impl FakeExt {
 	}
 }
 
-impl Ext for FakeExt {
+impl<T: shadow_mem::Shadow> Ext<T> for FakeExt {
 	fn initial_storage_at(&self, _key: &H256) -> Result<H256> {
 		Ok(H256::new())
 	}
@@ -146,7 +148,7 @@ impl Ext for FakeExt {
 		code: &[u8],
 		address: CreateContractAddress,
 		_trap: bool,
-	) -> ::std::result::Result<ContractCreateResult, TrapKind> {
+	) -> ::std::result::Result<ContractCreateResult<T>, TrapKind> {
 		self.calls.insert(FakeCall {
 			call_type: FakeCallType::Create,
 			create_scheme: Some(address),
@@ -171,7 +173,7 @@ impl Ext for FakeExt {
 		code_address: &Address,
 		_call_type: CallType,
 		_trap: bool,
-	) -> ::std::result::Result<MessageCallResult, TrapKind> {
+	) -> ::std::result::Result<MessageCallResult<T>, TrapKind> {
 		self.calls.insert(FakeCall {
 			call_type: FakeCallType::Call,
 			create_scheme: None,
@@ -183,7 +185,7 @@ impl Ext for FakeExt {
 			code_address: Some(code_address.clone())
 		});
 		// TODO: support traps in testing.
-		Ok(MessageCallResult::Success(*gas, ReturnData::empty()))
+		Ok(MessageCallResult::Success(*gas, ReturnData::empty(), shadow_mem::ShadowReturnData::empty()))
 	}
 
 	fn extcode(&self, address: &Address) -> Result<Option<Arc<Bytes>>> {

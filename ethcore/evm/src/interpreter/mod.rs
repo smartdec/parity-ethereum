@@ -45,6 +45,7 @@ use self::gasometer::Gasometer;
 use self::stack::{Stack, VecStack};
 use self::memory::Memory;
 pub use self::shared_cache::SharedCache;
+use self::shadow_mem::{Shadow, ShadowMemory, ShadowReturnData};
 
 use bit_set::BitSet;
 
@@ -182,6 +183,7 @@ pub struct Interpreter<Cost: CostType, Shadow: shadow_mem::Shadow> {
 	params: InterpreterParams,
 	reader: CodeReader,
 	return_data: ReturnData,
+	shadow_return_data: ShadowReturnData<Shadow>,
 	informant: informant::EvmInformant,
 	do_trace: bool,
 	done: bool,
@@ -194,11 +196,11 @@ pub struct Interpreter<Cost: CostType, Shadow: shadow_mem::Shadow> {
 	_type: PhantomData<Cost>,
 }
 
-impl<Cost, Shadow> vm::Exec for Interpreter<Cost, Shadow>
+impl<Cost, Shadow> vm::Exec<Shadow> for Interpreter<Cost, Shadow>
 	where Cost: 'static + CostType,
 		  Shadow: 'static + shadow_mem::Shadow
 {
-	fn exec(mut self: Box<Self>, ext: &mut vm::Ext) -> vm::ExecTrapResult<GasLeft> {
+	fn exec(mut self: Box<Self>, ext: &mut vm::Ext<Shadow>) -> vm::ExecTrapResult<GasLeft, Shadow> {
 		loop {
 			let result = self.step(ext);
 			match result {
@@ -218,36 +220,42 @@ impl<Cost, Shadow> vm::Exec for Interpreter<Cost, Shadow>
 	}
 }
 
-impl<Cost, Shadow> vm::ResumeCall for Interpreter<Cost, Shadow>
+impl<Cost, Shadow> vm::ResumeCall<Shadow> for Interpreter<Cost, Shadow>
 	where Cost: 'static + CostType,
 		  Shadow: 'static + shadow_mem::Shadow
 {
-	fn resume_call(mut self: Box<Self>, result: MessageCallResult) -> Box<vm::Exec> {
+	fn resume_call(mut self: Box<Self>, result: MessageCallResult<Shadow>) -> Box<vm::Exec<Shadow>> {
 		{
 			let this = &mut *self;
 			let (out_off, out_size) = this.resume_output_range.take().expect("Box<ResumeCall> is obtained from a call opcode; resume_output_range is always set after those opcodes are executed; qed");
 
 			match result {
-				MessageCallResult::Success(gas_left, data) => {
-					let output = this.mem.writeable_slice(out_off, out_size);
+				MessageCallResult::Success(gas_left, data, shadow_data) => {
+					let output = this.mem.writeable_slice(out_off.clone(), out_size.clone());
+					let shadow_output = this.shadow_mem.writable_slice(out_off.clone(), out_size.clone());
 					let len = cmp::min(output.len(), data.len());
 					(&mut output[..len]).copy_from_slice(&data[..len]);
+					(&mut shadow_output[..len]).clone_from_slice(&shadow_data[..len]);
 
 					this.return_data = data;
-					this.stack.push((U256::one(), Default::default()));
+					this.shadow_return_data = shadow_data;
+					this.stack.push((U256::one(), Shadow::for_const(U256::one())));
 					this.resume_result = Some(InstructionResult::UnusedGas(Cost::from_u256(gas_left).expect("Gas left cannot be greater than current one")));
 				},
-				MessageCallResult::Reverted(gas_left, data) => {
-					let output = this.mem.writeable_slice(out_off, out_size);
+				MessageCallResult::Reverted(gas_left, data, shadow_data) => {
+					let output = this.mem.writeable_slice(out_off.clone(), out_size.clone());
+					let shadow_output = this.shadow_mem.writable_slice(out_off.clone(), out_size.clone());
 					let len = cmp::min(output.len(), data.len());
 					(&mut output[..len]).copy_from_slice(&data[..len]);
+					(&mut shadow_output[..len]).clone_from_slice(&shadow_data[..len]);
 
 					this.return_data = data;
-					this.stack.push((U256::zero(), Default::default()));
+					this.shadow_return_data = shadow_data;
+					this.stack.push((U256::zero(), Shadow::for_const(U256::zero())));
 					this.resume_result = Some(InstructionResult::UnusedGas(Cost::from_u256(gas_left).expect("Gas left cannot be greater than current one")));
 				},
 				MessageCallResult::Failed => {
-					this.stack.push((U256::zero(), Default::default()));
+					this.stack.push((U256::zero(), Shadow::for_const(U256::zero())));
 					this.resume_result = Some(InstructionResult::Ok);
 				},
 			}
@@ -256,23 +264,24 @@ impl<Cost, Shadow> vm::ResumeCall for Interpreter<Cost, Shadow>
 	}
 }
 
-impl<Cost, Shadow> vm::ResumeCreate for Interpreter<Cost, Shadow>
+impl<Cost, Shadow> vm::ResumeCreate<Shadow> for Interpreter<Cost, Shadow>
 	where Cost: 'static + CostType,
 		  Shadow: 'static + shadow_mem::Shadow
 {
-	fn resume_create(mut self: Box<Self>, result: ContractCreateResult) -> Box<vm::Exec> {
+	fn resume_create(mut self: Box<Self>, result: ContractCreateResult<Shadow>) -> Box<vm::Exec<Shadow>> {
 		match result {
 			ContractCreateResult::Created(address, gas_left) => {
-				self.stack.push((address_to_u256(address), Default::default()));
+				self.stack.push((address_to_u256(address.clone()), Shadow::for_non_const_address(address.clone())));
 				self.resume_result = Some(InstructionResult::UnusedGas(Cost::from_u256(gas_left).expect("Gas left cannot be greater.")));
 			},
-			ContractCreateResult::Reverted(gas_left, return_data) => {
-				self.stack.push((U256::zero(), Default::default()));
+			ContractCreateResult::Reverted(gas_left, return_data, shadow_data) => {
+				self.stack.push((U256::zero(), Shadow::for_const(U256::zero())));
 				self.return_data = return_data;
+				self.shadow_return_data = shadow_data;
 				self.resume_result = Some(InstructionResult::UnusedGas(Cost::from_u256(gas_left).expect("Gas left cannot be greater.")));
 			},
 			ContractCreateResult::Failed => {
-				self.stack.push((U256::zero(), Default::default()));
+				self.stack.push((U256::zero(), Shadow::for_const(U256::zero())));
 				self.resume_result = Some(InstructionResult::Ok);
 			},
 		}
@@ -298,6 +307,7 @@ impl<Cost: CostType, Shadow: shadow_mem::Shadow> Interpreter<Cost, Shadow> {
 			do_trace: true,
 			mem: Vec::new(),
 			return_data: ReturnData::empty(),
+			shadow_return_data: ShadowReturnData::empty(),
 			last_stack_ret_len: 0,
 			resume_output_range: None,
 			resume_result: None,
@@ -307,7 +317,7 @@ impl<Cost: CostType, Shadow: shadow_mem::Shadow> Interpreter<Cost, Shadow> {
 
 	/// Execute a single step on the VM.
 	#[inline(always)]
-	pub fn step(&mut self, ext: &mut vm::Ext) -> InterpreterResult {
+	pub fn step(&mut self, ext: &mut vm::Ext<Shadow>) -> InterpreterResult {
 		if self.done {
 			return InterpreterResult::Stopped;
 		}
@@ -329,7 +339,7 @@ impl<Cost: CostType, Shadow: shadow_mem::Shadow> Interpreter<Cost, Shadow> {
 
 	/// Inner helper function for step.
 	#[inline(always)]
-	fn step_inner(&mut self, ext: &mut vm::Ext) -> Result<Never, InterpreterResult> {
+	fn step_inner(&mut self, ext: &mut vm::Ext<Shadow>) -> Result<Never, InterpreterResult> {
 		let result = match self.resume_result.take() {
 			Some(result) => result,
 			None => {
@@ -425,7 +435,7 @@ impl<Cost: CostType, Shadow: shadow_mem::Shadow> Interpreter<Cost, Shadow> {
 		Err(InterpreterResult::Continue)
 	}
 
-	fn verify_instruction(&self, ext: &vm::Ext, instruction: Instruction, info: &InstructionInfo) -> vm::Result<()> {
+	fn verify_instruction(&self, ext: &vm::Ext<Shadow>, instruction: Instruction, info: &InstructionInfo) -> vm::Result<()> {
 		let schedule = ext.schedule();
 
 		if (instruction == instructions::DELEGATECALL && !schedule.have_delegate_call) ||
@@ -492,7 +502,7 @@ impl<Cost: CostType, Shadow: shadow_mem::Shadow> Interpreter<Cost, Shadow> {
 	fn exec_instruction(
 		&mut self,
 		gas: Cost,
-		ext: &mut vm::Ext,
+		ext: &mut vm::Ext<Shadow>,
 		instruction: Instruction,
 		provided: Option<Cost>
 	) -> vm::Result<InstructionResult<Cost>> {
@@ -545,12 +555,13 @@ impl<Cost: CostType, Shadow: shadow_mem::Shadow> Interpreter<Cost, Shadow> {
 				let create_result = ext.create(&create_gas.as_u256(), &endowment, contract_code, address_scheme, true);
 				return match create_result {
 					Ok(ContractCreateResult::Created(address, gas_left)) => {
-						self.stack.push((address_to_u256(address.clone()), Shadow::for_address(address.clone())));
+						self.stack.push((address_to_u256(address.clone()), Shadow::for_non_const_address(address.clone())));
 						Ok(InstructionResult::UnusedGas(Cost::from_u256(gas_left).expect("Gas left cannot be greater.")))
 					},
-					Ok(ContractCreateResult::Reverted(gas_left, return_data)) => {
+					Ok(ContractCreateResult::Reverted(gas_left, return_data, shadow_data)) => {
 						self.stack.push((U256::zero(), Shadow::for_const(U256::zero())));
 						self.return_data = return_data;
+						self.shadow_return_data = shadow_data;
 						Ok(InstructionResult::UnusedGas(Cost::from_u256(gas_left).expect("Gas left cannot be greater.")))
 					},
 					Ok(ContractCreateResult::Failed) => {
@@ -563,6 +574,7 @@ impl<Cost: CostType, Shadow: shadow_mem::Shadow> Interpreter<Cost, Shadow> {
 				};
 			},
 			instructions::CALL | instructions::CALLCODE | instructions::DELEGATECALL | instructions::STATICCALL => {
+				// TODO add shadow transition here
 				assert!(ext.schedule().call_value_transfer_gas > ext.schedule().call_stipend, "overflow possible");
 
 				self.stack.pop_back();
@@ -624,23 +636,28 @@ impl<Cost: CostType, Shadow: shadow_mem::Shadow> Interpreter<Cost, Shadow> {
 				self.resume_output_range = Some((out_off, out_size));
 
 				return match call_result {
-					Ok(MessageCallResult::Success(gas_left, data)) => {
-						let output = self.mem.writeable_slice(out_off, out_size);
+					Ok(MessageCallResult::Success(gas_left, data, shadow_data)) => {
+						let output = self.mem.writeable_slice(out_off.clone(), out_size.clone());
+						let shadow_output = self.shadow_mem.writable_slice(out_off.clone(), out_size.clone());
 						let len = cmp::min(output.len(), data.len());
 						(&mut output[..len]).copy_from_slice(&data[..len]);
-						// for i in 0..len { shadow_output[i] = Default::default(); }
+						(&mut shadow_output[..len]).clone_from_slice(&shadow_data[..len]);
 
 						self.stack.push((U256::one(), Shadow::for_const(U256::one())));
 						self.return_data = data;
+						self.shadow_return_data = shadow_data;
 						Ok(InstructionResult::UnusedGas(Cost::from_u256(gas_left).expect("Gas left cannot be greater than current one")))
 					},
-					Ok(MessageCallResult::Reverted(gas_left, data)) => {
-						let output = self.mem.writeable_slice(out_off, out_size);
+					Ok(MessageCallResult::Reverted(gas_left, data, shadow_data)) => {
+						let output = self.mem.writeable_slice(out_off.clone(), out_size.clone());
+						let shadow_output = self.shadow_mem.writable_slice(out_off.clone(), out_size.clone());
 						let len = cmp::min(output.len(), data.len());
 						(&mut output[..len]).copy_from_slice(&data[..len]);
+						(&mut shadow_output[..len]).clone_from_slice(&shadow_data[..len]);
 
 						self.stack.push((U256::zero(), Shadow::for_const(U256::zero())));
 						self.return_data = data;
+						self.shadow_return_data = shadow_data;
 						Ok(InstructionResult::UnusedGas(Cost::from_u256(gas_left).expect("Gas left cannot be greater than current one")))
 					},
 					Ok(MessageCallResult::Failed) => {
@@ -694,36 +711,39 @@ impl<Cost: CostType, Shadow: shadow_mem::Shadow> Interpreter<Cost, Shadow> {
 			instructions::PUSH29 | instructions::PUSH30 | instructions::PUSH31 | instructions::PUSH32 => {
 				let bytes = instruction.push_bytes().expect("push_bytes always return some for PUSH* instructions");
 				let val = self.reader.read(bytes);
-				// TODO define which value is pushed into stack
-				self.stack.push((val, Default::default()));
+				let mut val_u8_vec = vec![0u8; 32];
+				val.to_little_endian(&mut val_u8_vec);
+				let shadow_val = Shadow::for_code(val_u8_vec);
+				self.stack.push((val, shadow_val));
 			},
 			instructions::MLOAD => {
-				// TODO Am I right that values from memory can't be constants?
+
 				let word = self.mem.read(self.stack.pop_back().0);
 				self.stack.push((word.clone(), Shadow::for_non_const_word(word.clone())));
 			},
 			instructions::MSTORE => {
 				let offset = self.stack.pop_back().0;
 				let word = self.stack.pop_back();
-				Memory::write(&mut self.mem, offset, word.0);
-				// Memory::write(&mut self.shadow_mem, offset, word.1);
+				Memory::write(&mut self.mem, offset.clone(), word.0);
+				ShadowMemory::write(&mut self.shadow_mem, offset.clone(), word.1);
 			},
 			instructions::MSTORE8 => {
 				let offset = self.stack.pop_back().0;
 				let byte = self.stack.pop_back();
-				self.mem.write_byte(offset, byte.0);
-				// self.shadow_mem.write_byte(offset, byte.1);
+				self.mem.write_byte(offset.clone(), byte.0);
+				self.shadow_mem.write_byte(offset.clone(), byte.1);
 			},
 			instructions::MSIZE => {
 				let size = U256::from(self.mem.size());
 				self.stack.push((size.clone(), Shadow::for_memory_size(size.clone())));
 			},
 			instructions::SHA3 => {
+				// TODO define if we should aggregate offset and size shadow value with memory one. Now we don't do it
 				let offset = self.stack.pop_back().0;
 				let size = self.stack.pop_back().0;
+				let shadow_mem = self.shadow_mem.read_slice(offset.clone(), size.clone());
 				let k = keccak(self.mem.read_slice(offset, size));
-				// TODO define which value is pushed into stack
-				self.stack.push((U256::from(&*k), Default::default()));
+				self.stack.push((U256::from(&*k), Shadow::aggregate(shadow_mem)));
 			},
 			instructions::SLOAD => {
 				// TODO to say something about value we need storage shadow memory
@@ -759,11 +779,12 @@ impl<Cost: CostType, Shadow: shadow_mem::Shadow> Interpreter<Cost, Shadow> {
 			},
 			instructions::ADDRESS => {
 				let address = self.params.address.clone();
-				let shadow = Shadow::for_env_variable(address);
+				let shadow = Shadow::for_env_variable(address_to_u256(address));
 				self.stack.push((address_to_u256(address), shadow));
 			},
 			instructions::ORIGIN => {
-				self.stack.push((address_to_u256(self.params.origin.clone()), Shadow::for_env_variable(self.params.origin.clone())))
+				let addr_256 = address_to_u256(self.params.origin.clone());
+				self.stack.push((addr_256.clone(), Shadow::for_env_variable(addr_256.clone())))
 			},
 			instructions::BALANCE => {
 				let address = u256_to_address(&self.stack.pop_back().0);
@@ -778,7 +799,9 @@ impl<Cost: CostType, Shadow: shadow_mem::Shadow> Interpreter<Cost, Shadow> {
 				let val = match self.params.value {
 					ActionValue::Transfer(val) | ActionValue::Apparent(val) => val
 				};
-				let shadow = Shadow::for_calldata(Bytes::from(val.clone()));
+				let mut val_u8_vec = vec![0u8; 32];
+				val.to_little_endian(&mut val_u8_vec);
+				let shadow = Shadow::for_calldata(val_u8_vec);
 				self.stack.push((val.clone(), shadow));
 			},
 			instructions::CALLDATALOAD => {
@@ -800,7 +823,9 @@ impl<Cost: CostType, Shadow: shadow_mem::Shadow> Interpreter<Cost, Shadow> {
 			},
 			instructions::CALLDATASIZE => {
 				let size = U256::from(self.params.data.as_ref().map_or(0, Vec::len));
-				self.stack.push((size.clone(), Shadow::for_calldata(Bytes::from(size.clone()))));
+				let mut val_u8_vec = vec![0u8; 32];
+				size.to_little_endian(&mut val_u8_vec);
+				self.stack.push((size.clone(), Shadow::for_calldata(val_u8_vec)));
 			},
 			instructions::CODESIZE => {
 				self.stack.push((U256::from(self.reader.len()), Shadow::for_env_variable(U256::from(self.reader.len()))));
@@ -811,7 +836,8 @@ impl<Cost: CostType, Shadow: shadow_mem::Shadow> Interpreter<Cost, Shadow> {
 			instructions::EXTCODESIZE => {
 				let address = u256_to_address(&self.stack.pop_back().0);
 				let len = ext.extcodesize(&address)?.unwrap_or(0);
-				let shadow = Shadow::for_external_code(Bytes::from(len));
+				let mut len_bytes : [u8; mem::size_of::<usize>()] = unsafe {std::mem::transmute(len.to_le())};
+				let shadow = Shadow::for_code(len_bytes.to_vec());
 				self.stack.push((U256::from(len), shadow));
 			},
 			instructions::EXTCODEHASH => {
@@ -820,8 +846,9 @@ impl<Cost: CostType, Shadow: shadow_mem::Shadow> Interpreter<Cost, Shadow> {
 				self.stack.push((U256::from(hash), Default::default()));
 			},
 			instructions::CALLDATACOPY => {
-				// TODO with shadow memory for memory
-				Self::copy_data_to_memory(&mut self.mem, &mut self.stack, &self.params.data.as_ref().map_or_else(|| &[] as &[u8], |d| &*d as &[u8]));
+				let data_to_copy = self.params.data.as_ref().map_or_else(|| &[] as &[u8], |d| &*d as &[u8]);
+				let shadow_vec = vec![Shadow::for_calldata(Bytes::from(data_to_copy)); data_to_copy.len()];
+				Self::copy_data_to_memory(&mut self.mem, &mut self.shadow_mem, &mut self.stack, &data_to_copy, &shadow_vec[..]);
 			},
 			instructions::RETURNDATACOPY => {
 				{
@@ -832,26 +859,32 @@ impl<Cost: CostType, Shadow: shadow_mem::Shadow> Interpreter<Cost, Shadow> {
 						return Err(vm::Error::OutOfBounds);
 					}
 				}
-				// TODO with shadow memory for memory
-				Self::copy_data_to_memory(&mut self.mem, &mut self.stack, &*self.return_data);
+				Self::copy_data_to_memory(&mut self.mem, &mut self.shadow_mem, &mut self.stack, &*self.return_data, &*self.shadow_return_data);
 			},
 			instructions::CODECOPY => {
-				// TODO with shadow memory for memory
-				Self::copy_data_to_memory(&mut self.mem, &mut self.stack, &self.reader.code);
+				let code_to_copy = &self.reader.code;
+				let code_raw = &code_to_copy[..];
+				let shadow_vec = vec![Shadow::for_code(code_raw); code_to_copy.len()];
+				Self::copy_data_to_memory(&mut self.mem, &mut self.shadow_mem, &mut self.stack, code_to_copy, &shadow_vec[..]);
 			},
 			instructions::EXTCODECOPY => {
-				// TODO with shadow memory for memory
 				let address = u256_to_address(&self.stack.pop_back().0);
 				let code = ext.extcode(&address)?;
+				let code_to_copy = code.as_ref().map(|c| &(*c)[..]).unwrap_or(&[]);
+				let shadow_vec = vec![Shadow::for_code(code_to_copy); code_to_copy.len()];
 				Self::copy_data_to_memory(
 					&mut self.mem,
+					&mut self.shadow_mem,
 					&mut self.stack,
-					code.as_ref().map(|c| &(*c)[..]).unwrap_or(&[])
+					&code_to_copy,
+					&shadow_vec[..]
 				);
 			},
 			instructions::GASPRICE => {
 				let gas_price = self.params.gas_price.clone();
-				self.stack.push((gas_price.clone(), Shadow::for_calldata(Bytes::from(&gas_price))));
+				let mut val_u8_vec = vec![0u8; 32];
+				gas_price.to_little_endian(&mut val_u8_vec);
+				self.stack.push((gas_price.clone(), Shadow::for_calldata(val_u8_vec)));
 			},
 			instructions::BLOCKHASH => {
 				let block_number = self.stack.pop_back().0;
@@ -937,8 +970,8 @@ impl<Cost: CostType, Shadow: shadow_mem::Shadow> Interpreter<Cost, Shadow> {
 						_ => a.0 / b.0,
 					}
 				} else {
-					U256::zero();
 					shadow = Default::default();
+					U256::zero()
 				};
 				self.stack.push((res, shadow));
 			},
@@ -949,8 +982,8 @@ impl<Cost: CostType, Shadow: shadow_mem::Shadow> Interpreter<Cost, Shadow> {
 				let res = if !b.0.is_zero() {
 					a.0 % b.0
 				} else {
-					U256::zero();
 					shadow = Default::default();
+					U256::zero()
 				};
 				self.stack.push((res, shadow));
 			},
@@ -1055,7 +1088,7 @@ impl<Cost: CostType, Shadow: shadow_mem::Shadow> Interpreter<Cost, Shadow> {
 				let a = self.stack.pop_back();
 				let b = self.stack.pop_back();
 				let res = a.0 & b.0;
-				self.stack.push((res, Shadow::megre(&a.1, &b.1)));
+				self.stack.push((res, Shadow::merge(&a.1, &b.1)));
 			},
 			instructions::OR => {
 				let a = self.stack.pop_back();
@@ -1080,37 +1113,43 @@ impl<Cost: CostType, Shadow: shadow_mem::Shadow> Interpreter<Cost, Shadow> {
 				self.stack.push((byte, val_shadow));
 			},
 			instructions::ADDMOD => {
-				// TODO make up logic for combining three values
-				let a = self.stack.pop_back().0;
-				let b = self.stack.pop_back().0;
-				let c = self.stack.pop_back().0;
-				let res = if !c.is_zero() {
+				let a = self.stack.pop_back();
+				let b = self.stack.pop_back();
+				let c = self.stack.pop_back();
+				// Used aggregate function
+				let mut shadow_val = Shadow::aggregate(&[a.1, b.1, c.1]);
+
+				let res = if !c.0.is_zero() {
 					// upcast to 512
-					let a5 = U512::from(a);
-					let res = a5.overflowing_add(U512::from(b)).0;
-					let x = res % U512::from(c);
+					let a5 = U512::from(a.0);
+					let res = a5.overflowing_add(U512::from(b.0)).0;
+					let x = res % U512::from(c.0);
 					U256::from(x)
 				} else {
+					shadow_val = Default::default();
 					U256::zero()
 				};
 
-				self.stack.push((res, Default::default()));
+				self.stack.push((res, shadow_val));
 			},
 			instructions::MULMOD => {
-				// TODO make up logic for combining three values
-				let a = self.stack.pop_back().0;
-				let b = self.stack.pop_back().0;
-				let c = self.stack.pop_back().0;
-				let res = if !c.is_zero() {
-					let a5 = U512::from(a);
-					let res = a5.overflowing_mul(U512::from(b)).0;
-					let x = res % U512::from(c);
+				let a = self.stack.pop_back();
+				let b = self.stack.pop_back();
+				let c = self.stack.pop_back();
+				// Used aggregate function
+				let mut shadow_val = Shadow::aggregate(&[a.1, b.1, c.1]);
+
+				let res = if !c.0.is_zero() {
+					let a5 = U512::from(a.0);
+					let res = a5.overflowing_mul(U512::from(b.0)).0;
+					let x = res % U512::from(c.0);
 					U256::from(x)
 				} else {
+					shadow_val = Default::default();
 					U256::zero()
 				};
 
-				self.stack.push((res, Default::default()));
+				self.stack.push((res, shadow_val));
 			},
 			instructions::SIGNEXTEND => {
 				let bit = self.stack.pop_back();
@@ -1141,7 +1180,7 @@ impl<Cost: CostType, Shadow: shadow_mem::Shadow> Interpreter<Cost, Shadow> {
 				} else {
 					value.0 << (shift.0.as_u32() as usize)
 				};
-				self.stack.push((result, value.1));
+				self.stack.push((result, Shadow::merge(&shift.1, &value.1)));
 			},
 			instructions::SHR => {
 				// TODO I think we should combine values here to. For example, if we shift const on no const value it becomes no const
@@ -1158,7 +1197,6 @@ impl<Cost: CostType, Shadow: shadow_mem::Shadow> Interpreter<Cost, Shadow> {
 				self.stack.push((result, Shadow::merge(&shift.1, &value.1)));
 			},
 			instructions::SAR => {
-				// TODO make up logic for combining three values
 				// We cannot use get_and_reset_sign/set_sign here, because the rounding looks different.
 
 				const CONST_256: U256 = U256([256, 0, 0, 0]);
@@ -1182,13 +1220,13 @@ impl<Cost: CostType, Shadow: shadow_mem::Shadow> Interpreter<Cost, Shadow> {
 					}
 					shifted
 				};
-				self.stack.push((result, value.1));
+				self.stack.push((result, Shadow::merge(&value.1, &shift.1)));
 			},
 		};
 		Ok(InstructionResult::Ok)
 	}
 
-	fn copy_data_to_memory(mem: &mut Vec<u8>, stack: &mut Stack<(U256, Shadow)>, source: &[u8]) {
+	fn copy_data_to_memory(mem: &mut Vec<u8>, shadow_mem: &mut Vec<Shadow>, stack: &mut Stack<(U256, Shadow)>, source: &[u8], source_shadow: &[Shadow]) {
 		let dest_offset = stack.pop_back().0;
 		let source_offset = stack.pop_back().0;
 		let size = stack.pop_back().0;
@@ -1211,7 +1249,8 @@ impl<Cost: CostType, Shadow: shadow_mem::Shadow> Interpreter<Cost, Shadow> {
 
 		if source_offset < source_size {
 			let output_begin = source_offset.low_u64() as usize;
-			mem.write_slice(dest_offset, &source[output_begin..output_end]);
+			mem.write_slice(dest_offset.clone(), &source[output_begin..output_end]);
+			shadow_mem.write_slice(dest_offset.clone(), &source_shadow[output_begin..output_end])
 		}
 	}
 
@@ -1237,7 +1276,7 @@ impl<Cost: CostType, Shadow: shadow_mem::Shadow> Interpreter<Cost, Shadow> {
 }
 
 fn get_and_reset_sign(value: U256) -> (U256, bool) {
-	let U256(arr) = value;
+	let U256(arr) = value.clone();
 	let sign = arr[3].leading_zeros() == 0;
 	(set_sign(value, sign), sign)
 }
@@ -1269,7 +1308,7 @@ mod tests {
 	use vm::{self, Exec, ActionParams, ActionValue};
 	use vm::tests::{FakeExt, test_finalize};
 
-	fn interpreter(params: ActionParams, ext: &vm::Ext) -> Box<Exec> {
+	fn interpreter(params: ActionParams, ext: &vm::Ext<shadow_mem::fake::ShadowFake>) -> Box<Exec<shadow_mem::fake::ShadowFake>> {
 		Factory::new(VMType::Interpreter, 1).create(params, ext.schedule(), ext.depth())
 	}
 

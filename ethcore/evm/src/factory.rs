@@ -15,7 +15,9 @@
 // along with Parity.  If not, see <http://www.gnu.org/licenses/>.
 
 //! Evm factory.
-//!
+
+extern crate shadow_mem;
+
 use std::sync::Arc;
 use vm::{Exec, Schedule};
 use ethereum_types::U256;
@@ -33,12 +35,12 @@ pub struct Factory {
 impl Factory {
 	/// Create fresh instance of VM
 	/// Might choose implementation depending on supplied gas.
-	pub fn create(&self, params: ActionParams, schedule: &Schedule, depth: usize) -> Box<Exec> {
+	pub fn create<Shadow: 'static + shadow_mem::Shadow + Sized>(&self, params: ActionParams, schedule: &Schedule, depth: usize) -> Box<Exec<Shadow>> {
 		match self.evm {
 			VMType::Interpreter => if Self::can_fit_in_usize(&params.gas) {
-				Box::new(super::interpreter::Interpreter::<usize>::new(params, self.evm_cache.clone(), schedule, depth))
+				Box::new(super::interpreter::Interpreter::<usize, Shadow>::new(params, self.evm_cache.clone(), schedule, depth))
 			} else {
-				Box::new(super::interpreter::Interpreter::<U256>::new(params, self.evm_cache.clone(), schedule, depth))
+				Box::new(super::interpreter::Interpreter::<U256, Shadow>::new(params, self.evm_cache.clone(), schedule, depth))
 			}
 		}
 	}

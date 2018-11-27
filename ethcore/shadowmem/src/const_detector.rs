@@ -25,7 +25,7 @@ impl Shadow for ShadowConst {
 	fn for_env_variable(_v: U256) -> ShadowConst { ShadowConst::NonConst }
 	fn for_const_hash(_h: H256) -> ShadowConst { ShadowConst::Const }
 	fn for_non_const_hash(_h: H256) -> ShadowConst { ShadowConst::Const }
-	fn for_external_code(_data: Bytes) -> ShadowConst { ShadowConst::NonConst }
+	fn for_code(_data: Bytes) -> ShadowConst { ShadowConst::Const }
 
 	fn merge(&left: &Self, &right: &Self) -> ShadowConst {
 		match left {
@@ -36,6 +36,18 @@ impl Shadow for ShadowConst {
 				_ => right
 			}
 		}
+	}
+	fn aggregate(values: &[Self]) -> Self {
+		let mut result = ShadowConst::Const;
+		for val in values {
+			if result == ShadowConst::Const && *val == ShadowConst::NonConst {
+				result = ShadowConst::NonConst;
+			}
+			if *val == ShadowConst::Undefined {
+				result = ShadowConst::Undefined;
+			}
+		}
+		return result;
 	}
 }
 

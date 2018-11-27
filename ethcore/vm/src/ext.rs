@@ -16,6 +16,8 @@
 
 //! Interface for Evm externalities.
 
+extern crate shadow_mem;
+
 use std::sync::Arc;
 use ethereum_types::{U256, H256, Address};
 use bytes::Bytes;
@@ -27,7 +29,7 @@ use error::{Result, TrapKind};
 
 #[derive(Debug)]
 /// Result of externalities create function.
-pub enum ContractCreateResult {
+pub enum ContractCreateResult<T: shadow_mem::Shadow> {
 	/// Returned when creation was successfull.
 	/// Contains an address of newly created contract and gas left.
 	Created(Address, U256),
@@ -35,21 +37,21 @@ pub enum ContractCreateResult {
 	/// VM doesn't have to know the reason.
 	Failed,
 	/// Reverted with REVERT.
-	Reverted(U256, ReturnData),
+	Reverted(U256, ReturnData, shadow_mem::ShadowReturnData<T>),
 }
 
 #[derive(Debug)]
 /// Result of externalities call function.
-pub enum MessageCallResult {
+pub enum MessageCallResult<T: shadow_mem::Shadow> {
 	/// Returned when message call was successfull.
 	/// Contains gas left and output data.
-	Success(U256, ReturnData),
+	Success(U256, ReturnData, shadow_mem::ShadowReturnData<T>),
 	/// Returned when message call failed.
 	/// VM doesn't have to know the reason.
 	Failed,
 	/// Returned when message call was reverted.
 	/// Contains gas left and output data.
-	Reverted(U256, ReturnData),
+	Reverted(U256, ReturnData, shadow_mem::ShadowReturnData<T>),
 }
 
 /// Specifies how an address is calculated for a new contract.
@@ -64,7 +66,7 @@ pub enum CreateContractAddress {
 }
 
 /// Externalities interface for EVMs
-pub trait Ext {
+pub trait Ext<S: shadow_mem::Shadow> {
 	/// Returns the storage value for a given key if reversion happens on the current transaction.
 	fn initial_storage_at(&self, key: &H256) -> Result<H256>;
 
@@ -99,7 +101,7 @@ pub trait Ext {
 		code: &[u8],
 		address: CreateContractAddress,
 		trap: bool,
-	) -> ::std::result::Result<ContractCreateResult, TrapKind>;
+	) -> ::std::result::Result<ContractCreateResult<S>, TrapKind>;
 
 	/// Message call.
 	///
@@ -116,7 +118,7 @@ pub trait Ext {
 		code_address: &Address,
 		call_type: CallType,
 		trap: bool
-	) -> ::std::result::Result<MessageCallResult, TrapKind>;
+	) -> ::std::result::Result<MessageCallResult<S>, TrapKind>;
 
 	/// Returns code at given address
 	fn extcode(&self, address: &Address) -> Result<Option<Arc<Bytes>>>;
