@@ -5,7 +5,6 @@ extern crate parity_bytes;
 
 use ethereum_types::{U256, Address, H256};
 use super::Shadow;
-use parity_bytes::Bytes;
 
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -16,7 +15,7 @@ pub enum ShadowConst {
 }
 
 impl Shadow for ShadowConst {
-	fn for_calldata(_data: Bytes) -> ShadowConst { ShadowConst::NonConst }
+	fn for_calldata(_data: &[u8]) -> ShadowConst { ShadowConst::NonConst }
 	fn for_const(_v: U256) -> ShadowConst { ShadowConst::Const }
 	fn for_non_const_address(_v: Address) -> ShadowConst { ShadowConst::NonConst }
 	fn for_const_address(_v: Address) -> ShadowConst { ShadowConst::Const }
@@ -25,7 +24,7 @@ impl Shadow for ShadowConst {
 	fn for_env_variable(_v: U256) -> ShadowConst { ShadowConst::NonConst }
 	fn for_const_hash(_h: H256) -> ShadowConst { ShadowConst::Const }
 	fn for_non_const_hash(_h: H256) -> ShadowConst { ShadowConst::Const }
-	fn for_code(_data: Bytes) -> ShadowConst { ShadowConst::Const }
+	fn for_code(_data: &[u8]) -> ShadowConst { ShadowConst::Const }
 
 	fn merge(&left: &Self, &right: &Self) -> ShadowConst {
 		match left {

@@ -7,11 +7,10 @@ extern crate ethereum_types;
 extern crate parity_bytes;
 
 use ethereum_types::{U256, H256, Address};
-use parity_bytes::Bytes;
 
 
 pub trait Shadow: Default + Clone + Send {
-	fn for_calldata(data: Bytes) -> Self;
+	fn for_calldata(data: &[u8]) -> Self;
 	fn for_const(v: U256) -> Self;
 	fn for_non_const_address(v: Address) -> Self;
 	fn for_const_address(v: Address) -> Self;
@@ -20,9 +19,9 @@ pub trait Shadow: Default + Clone + Send {
 	fn for_env_variable(v: U256) -> Self;
 	fn for_const_hash(h: H256) -> Self;
 	fn for_non_const_hash(h: H256) -> Self;
-	fn for_code(data: Bytes) -> Self;
+	fn for_code(data: &[u8]) -> Self;
 	fn merge(left: &Self, right: &Self) -> Self;
-	fn merge_slices(left: &[Self], right: &[Self]) -> Result<Vec<Self>, &'static str> where Self: Sized {
+	fn merge_slices(left: &[Self], right: &[Self]) -> Result<Vec<Self>, &'static str> {
 		if left.len() != right.len() {
 			return Err("Merging slices have different length")
 		}

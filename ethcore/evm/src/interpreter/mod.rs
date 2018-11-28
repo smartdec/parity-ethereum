@@ -696,7 +696,7 @@ impl<Cost: CostType, Shadow: shadow_mem::Shadow> Interpreter<Cost, Shadow> {
 				let size = self.stack.pop_back().0;
 				let topics = self.stack.pop_n(no_of_topics)
 					.iter()
-					.map(|(v, s)| v)
+					.map(|(v, _s)| v)
 					.map(H256::from)
 					.collect();
 				ext.log(topics, self.mem.read_slice(offset, size))?;
@@ -711,9 +711,9 @@ impl<Cost: CostType, Shadow: shadow_mem::Shadow> Interpreter<Cost, Shadow> {
 			instructions::PUSH29 | instructions::PUSH30 | instructions::PUSH31 | instructions::PUSH32 => {
 				let bytes = instruction.push_bytes().expect("push_bytes always return some for PUSH* instructions");
 				let val = self.reader.read(bytes);
-				let mut val_u8_vec = vec![0u8; 32];
+				let mut val_u8_vec = [0u8; 32];
 				val.to_little_endian(&mut val_u8_vec);
-				let shadow_val = Shadow::for_code(val_u8_vec);
+				let shadow_val = Shadow::for_code(&val_u8_vec);
 				self.stack.push((val, shadow_val));
 			},
 			instructions::MLOAD => {
@@ -799,9 +799,9 @@ impl<Cost: CostType, Shadow: shadow_mem::Shadow> Interpreter<Cost, Shadow> {
 				let val = match self.params.value {
 					ActionValue::Transfer(val) | ActionValue::Apparent(val) => val
 				};
-				let mut val_u8_vec = vec![0u8; 32];
+				let mut val_u8_vec = [0u8; 32];
 				val.to_little_endian(&mut val_u8_vec);
-				let shadow = Shadow::for_calldata(val_u8_vec);
+				let shadow = Shadow::for_calldata(&val_u8_vec);
 				self.stack.push((val.clone(), shadow));
 			},
 			instructions::CALLDATALOAD => {
@@ -813,7 +813,7 @@ impl<Cost: CostType, Shadow: shadow_mem::Shadow> Interpreter<Cost, Shadow> {
 					if id < bound && big_id < U256::from(data.len()) {
 						let mut v = [0u8; 32];
 						v[0..bound-id].clone_from_slice(&data[id..bound]);
-						self.stack.push((U256::from(&v[..]), Shadow::for_calldata(Bytes::from(&v[..]))))
+						self.stack.push((U256::from(&v[..]), Shadow::for_calldata(&v)))
 					} else {
 						self.stack.push((U256::zero(), Shadow::for_const(U256::zero())))
 					}
@@ -823,9 +823,9 @@ impl<Cost: CostType, Shadow: shadow_mem::Shadow> Interpreter<Cost, Shadow> {
 			},
 			instructions::CALLDATASIZE => {
 				let size = U256::from(self.params.data.as_ref().map_or(0, Vec::len));
-				let mut val_u8_vec = vec![0u8; 32];
+				let mut val_u8_vec = [0u8; 32];
 				size.to_little_endian(&mut val_u8_vec);
-				self.stack.push((size.clone(), Shadow::for_calldata(val_u8_vec)));
+				self.stack.push((size.clone(), Shadow::for_calldata(&val_u8_vec)));
 			},
 			instructions::CODESIZE => {
 				self.stack.push((U256::from(self.reader.len()), Shadow::for_env_variable(U256::from(self.reader.len()))));
@@ -837,7 +837,7 @@ impl<Cost: CostType, Shadow: shadow_mem::Shadow> Interpreter<Cost, Shadow> {
 				let address = u256_to_address(&self.stack.pop_back().0);
 				let len = ext.extcodesize(&address)?.unwrap_or(0);
 				let mut len_bytes : [u8; mem::size_of::<usize>()] = unsafe {std::mem::transmute(len.to_le())};
-				let shadow = Shadow::for_code(len_bytes.to_vec());
+				let shadow = Shadow::for_code(&len_bytes);
 				self.stack.push((U256::from(len), shadow));
 			},
 			instructions::EXTCODEHASH => {
@@ -847,7 +847,7 @@ impl<Cost: CostType, Shadow: shadow_mem::Shadow> Interpreter<Cost, Shadow> {
 			},
 			instructions::CALLDATACOPY => {
 				let data_to_copy = self.params.data.as_ref().map_or_else(|| &[] as &[u8], |d| &*d as &[u8]);
-				let shadow_vec = vec![Shadow::for_calldata(Bytes::from(data_to_copy)); data_to_copy.len()];
+				let shadow_vec = vec![Shadow::for_calldata(data_to_copy); data_to_copy.len()];
 				Self::copy_data_to_memory(&mut self.mem, &mut self.shadow_mem, &mut self.stack, &data_to_copy, &shadow_vec[..]);
 			},
 			instructions::RETURNDATACOPY => {
@@ -882,9 +882,9 @@ impl<Cost: CostType, Shadow: shadow_mem::Shadow> Interpreter<Cost, Shadow> {
 			},
 			instructions::GASPRICE => {
 				let gas_price = self.params.gas_price.clone();
-				let mut val_u8_vec = vec![0u8; 32];
+				let mut val_u8_vec = [0u8; 32];
 				gas_price.to_little_endian(&mut val_u8_vec);
-				self.stack.push((gas_price.clone(), Shadow::for_calldata(val_u8_vec)));
+				self.stack.push((gas_price.clone(), Shadow::for_calldata(&val_u8_vec)));
 			},
 			instructions::BLOCKHASH => {
 				let block_number = self.stack.pop_back().0;
