@@ -25,6 +25,16 @@ struct Foo {
 	a: String,
 }
 
+#[derive(Debug, PartialEq, RlpEncodable, RlpDecodable)]
+enum Bar {
+	A,
+	B(String),
+	C {
+		parent: String,
+		children: Vec<String>,
+	}
+}
+
 #[derive(Debug, PartialEq, RlpEncodableWrapper, RlpDecodableWrapper)]
 struct FooWrapper {
 	a: String,
@@ -42,6 +52,18 @@ fn test_encode_foo() {
 
 	let decoded = decode(&expected).expect("decode failure");
 	assert_eq!(foo, decoded);
+}
+
+#[test]
+fn test_encode_bar() {
+	let bar = Bar::B("cat".into());
+
+	let expected = vec![0xc6, b'B', 0xc4, 0x83, b'c', b'a', b't'];
+	let out = encode(&bar);
+	assert_eq!(out, expected);
+
+	let decoded = decode(&expected).expect("decode failure");
+	assert_eq!(bar, decoded);
 }
 
 #[test]
