@@ -24,8 +24,6 @@ use vm::{Exec, ActionParams, Schedule};
 //use wasm::WasmInterpreter;
 use keccak_hasher::KeccakHasher;
 
-const WASM_MAGIC_NUMBER: &'static [u8; 4] = b"\0asm";
-
 /// Virtual machine factory
 #[derive(Default, Clone)]
 pub struct VmFactory {

@@ -28,7 +28,7 @@ pub struct RuntimeContext {
 	pub value: U256,
 }
 
-pub struct Runtime<'a> {
+pub struct Runtime<'a, S: Shadow> {
 	gas_counter: u64,
 	gas_limit: u64,
 	ext: &'a mut vm::Ext,

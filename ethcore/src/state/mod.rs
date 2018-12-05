@@ -494,7 +494,10 @@ impl<B: Backend> State<B> {
 		// TODO: deconstruct without cloning.
 		let account = self.require(account, true)?;
 		//TODO passthrought shadow value
-		let storage: HashMap<H256, H256> = account.storage_changes().into_iter().map(|(key, value)|{(key, value.0)}).collect();
+		let storage: HashMap<H256, H256> = account.storage_changes()
+			.into_iter()
+			.map(|(&key, value)| (key, value.0))
+			.collect();
 		Ok((account.code().clone(), storage))
 	}
 

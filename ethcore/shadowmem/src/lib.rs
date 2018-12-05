@@ -11,9 +11,10 @@ extern crate rlp;
 
 use ethereum_types::{U256, H256, Address};
 use rlp::{Encodable, Decodable, RlpStream, Rlp, DecoderError};
+use std::fmt::Debug;
 
 
-pub trait Shadow: Default + Clone + Send + Encodable + Decodable {
+pub trait Shadow: Default + Clone + Send + Encodable + Decodable + Debug {
 	fn for_calldata(data: &[u8]) -> Self;
 	fn for_const(v: U256) -> Self;
 	fn for_non_const_address(v: Address) -> Self;

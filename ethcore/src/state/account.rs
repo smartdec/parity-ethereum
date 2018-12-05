@@ -262,7 +262,7 @@ impl<Shadow: shadow_mem::Shadow> Account<Shadow> {
 		}
 	}
 
-	fn get_and_cache_storage(storage_root: &H256, storage_cache: &mut LruCache<H256, H256>, db: &HashDB<KeccakHasher, DBValue>, key: &H256) -> TrieResult<(H256, Shadow)> {
+	fn get_and_cache_storage(storage_root: &H256, storage_cache: &mut LruCache<H256, (H256, Shadow)>, db: &HashDB<KeccakHasher, DBValue>, key: &H256) -> TrieResult<(H256, Shadow)> {
 		let db = SecTrieDB::new(db, storage_root)?;
 		let panicky_decoder = |bytes:&[u8]| ::rlp::decode(&bytes).expect("decoding db value failed");
 		let item: shadow_mem::PairU256Shadow<Shadow> = db.get_with(key, panicky_decoder)?.unwrap_or(shadow_mem::PairU256Shadow{
