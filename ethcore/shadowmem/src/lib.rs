@@ -3,13 +3,17 @@
 pub mod const_detector;
 pub mod fake;
 
+#[macro_use]
+extern crate rlp_derive;
 extern crate ethereum_types;
 extern crate parity_bytes;
+extern crate rlp;
 
 use ethereum_types::{U256, H256, Address};
+use rlp::{Encodable, Decodable, RlpStream, Rlp, DecoderError};
 
 
-pub trait Shadow: Default + Clone + Send {
+pub trait Shadow: Default + Clone + Send + Encodable + Decodable {
 	fn for_calldata(data: &[u8]) -> Self;
 	fn for_const(v: U256) -> Self;
 	fn for_non_const_address(v: Address) -> Self;
@@ -162,5 +166,27 @@ impl<T: Shadow> ShadowReturnData<T> {
 			offset: offset,
 			size: size,
 		}
+	}
+}
+
+pub struct PairU256Shadow<S: Shadow> {
+	pub value: U256,
+	pub shadow_value: S
+}
+
+impl<S: Shadow> Encodable for PairU256Shadow<S> {
+	fn rlp_append(&self, s: &mut RlpStream) {
+		s.begin_list(2);
+		s.append(&self.value);
+		s.append(&self.shadow_value);
+	}
+}
+
+impl<S: Shadow> Decodable for PairU256Shadow<S> {
+	fn decode(rlp: &Rlp) -> Result<Self, DecoderError> {
+		Ok(PairU256Shadow{
+			value: rlp.val_at(0)?,
+			shadow_value: rlp.val_at(1)?
+		})
 	}
 }

@@ -29,6 +29,7 @@ use vm::{
 };
 use transaction::UNSIGNED_SENDER;
 use trace::{Tracer, VMTracer};
+use shadow_mem::fake::{ShadowFake};
 
 /// Policy for handling output data on `RETURN` opcode.
 pub enum OutputPolicy {
@@ -112,7 +113,8 @@ impl<'a, T: 'a, V: 'a, B: 'a> Externalities<'a, T, V, B>
 	}
 }
 
-impl<'a, T: 'a, V: 'a, B: 'a> Ext for Externalities<'a, T, V, B>
+// TODO insert generic for shadow
+impl<'a, T: 'a, V: 'a, B: 'a> Ext<ShadowFake> for Externalities<'a, T, V, B>
 	where T: Tracer, V: VMTracer, B: StateBackend
 {
 	fn initial_storage_at(&self, key: &H256) -> vm::Result<H256> {
@@ -203,6 +205,7 @@ impl<'a, T: 'a, V: 'a, B: 'a> Ext for Externalities<'a, T, V, B>
 		}
 	}
 
+	// TODO insert generic for shadow
 	fn create(
 		&mut self,
 		gas: &U256,
@@ -210,7 +213,7 @@ impl<'a, T: 'a, V: 'a, B: 'a> Ext for Externalities<'a, T, V, B>
 		code: &[u8],
 		address_scheme: CreateContractAddress,
 		trap: bool,
-	) -> ::std::result::Result<ContractCreateResult, TrapKind> {
+	) -> ::std::result::Result<ContractCreateResult<ShadowFake>, TrapKind> {
 		// create new contract address
 		let (address, code_hash) = match self.state.nonce(&self.origin_info.address) {
 			Ok(nonce) => contract_address(address_scheme, &self.origin_info.address, &nonce, &code),
@@ -255,6 +258,7 @@ impl<'a, T: 'a, V: 'a, B: 'a> Ext for Externalities<'a, T, V, B>
 		Ok(into_contract_create_result(out, &address, self.substate))
 	}
 
+	// TODO insert generic for shadow
 	fn call(
 		&mut self,
 		gas: &U256,
@@ -265,7 +269,7 @@ impl<'a, T: 'a, V: 'a, B: 'a> Ext for Externalities<'a, T, V, B>
 		code_address: &Address,
 		call_type: CallType,
 		trap: bool,
-	) -> ::std::result::Result<MessageCallResult, TrapKind> {
+	) -> ::std::result::Result<MessageCallResult<ShadowFake>, TrapKind> {
 		trace!(target: "externalities", "call");
 
 		let code_res = self.state.code(code_address)

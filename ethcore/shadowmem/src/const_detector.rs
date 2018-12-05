@@ -7,7 +7,7 @@ use ethereum_types::{U256, Address, H256};
 use super::Shadow;
 
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, RlpEncodable, RlpDecodable)]
 pub enum ShadowConst {
 	Undefined,
 	Const,

@@ -34,6 +34,7 @@ use lru_cache::LruCache;
 use memory_cache::MemoryLruCache;
 use parking_lot::Mutex;
 use state::{self, Account};
+use shadow_mem::fake::{ShadowFake};
 
 /// Value used to initialize bloom bitmap size.
 ///
@@ -54,11 +55,12 @@ const STATE_CACHE_BLOCKS: usize = 12;
 const ACCOUNT_CACHE_RATIO: usize = 90;
 
 /// Shared canonical state cache.
+// TODO insert generic for shadow
 struct AccountCache {
 	/// DB Account cache. `None` indicates that account is known to be missing.
 	// When changing the type of the values here, be sure to update `mem_used` and
 	// `new`.
-	accounts: LruCache<Address, Option<Account>>,
+	accounts: LruCache<Address, Option<Account<ShadowFake>>>,
 	/// Information on the modifications in recently committed blocks; specifically which addresses
 	/// changed in which block. Ordered by block number.
 	modifications: VecDeque<BlockChanges>,
@@ -130,12 +132,13 @@ impl StateDB {
 	/// Create a new instance wrapping `JournalDB` and the maximum allowed size
 	/// of the LRU cache in bytes. Actual used memory may (read: will) be higher due to bookkeeping.
 	// TODO: make the cache size actually accurate by moving the account storage cache
+	// TODO add generic foe shadow value
 	// into the `AccountCache` structure as its own `LruCache<(Address, H256), H256>`.
 	pub fn new(db: Box<JournalDB>, cache_size: usize) -> StateDB {
 		let bloom = Self::load_bloom(&**db.backing());
 		let acc_cache_size = cache_size * ACCOUNT_CACHE_RATIO / 100;
 		let code_cache_size = cache_size - acc_cache_size;
-		let cache_items = acc_cache_size / ::std::mem::size_of::<Option<Account>>();
+		let cache_items = acc_cache_size / ::std::mem::size_of::<Option<Account<ShadowFake>>>();
 
 		StateDB {
 			db: db,
@@ -359,10 +362,11 @@ impl StateDB {
 	/// Heap size used.
 	pub fn mem_used(&self) -> usize {
 		// TODO: account for LRU-cache overhead; this is a close approximation.
+		// TODO add generic for shadow value
 		self.db.mem_used() + {
 			let accounts = self.account_cache.lock().accounts.len();
 			let code_size = self.code_cache.lock().current_size();
-			code_size + accounts * ::std::mem::size_of::<Option<Account>>()
+			code_size + accounts * ::std::mem::size_of::<Option<Account<ShadowFake>>>()
 		}
 	}
 
@@ -411,6 +415,7 @@ impl StateDB {
 	}
 }
 
+// TODO insert generic for shadow
 impl state::Backend for StateDB {
 	fn as_hashdb(&self) -> &HashDB<KeccakHasher, DBValue> { self.db.as_hashdb() }
 
@@ -418,7 +423,7 @@ impl state::Backend for StateDB {
 		self.db.as_hashdb_mut()
 	}
 
-	fn add_to_account_cache(&mut self, addr: Address, data: Option<Account>, modified: bool) {
+	fn add_to_account_cache(&mut self, addr: Address, data: Option<Account<ShadowFake>>, modified: bool) {
 		self.local_cache.push(CacheQueueItem {
 			address: addr,
 			account: SyncAccount(data),
@@ -432,7 +437,7 @@ impl state::Backend for StateDB {
 		cache.insert(hash, code);
 	}
 
-	fn get_cached_account(&self, addr: &Address) -> Option<Option<Account>> {
+	fn get_cached_account(&self, addr: &Address) -> Option<Option<Account<ShadowFake>>> {
 		let mut cache = self.account_cache.lock();
 		if !Self::is_allowed(addr, &self.parent_hash, &cache.modifications) {
 			return None;
@@ -441,7 +446,7 @@ impl state::Backend for StateDB {
 	}
 
 	fn get_cached<F, U>(&self, a: &Address, f: F) -> Option<U>
-		where F: FnOnce(Option<&mut Account>) -> U {
+		where F: FnOnce(Option<&mut Account<ShadowFake>>) -> U {
 		let mut cache = self.account_cache.lock();
 		if !Self::is_allowed(a, &self.parent_hash, &cache.modifications) {
 			return None;
@@ -470,7 +475,8 @@ impl state::Backend for StateDB {
 }
 
 /// Sync wrapper for the account.
-struct SyncAccount(Option<Account>);
+// TODO insert generic for shadow
+struct SyncAccount(Option<Account<ShadowFake>>);
 /// That implementation is safe because account is never modified or accessed in any way.
 /// We only need `Sync` here to allow `StateDb` to be kept in a `RwLock`.
 /// `Account` is `!Sync` by default because of `RefCell`s inside it.

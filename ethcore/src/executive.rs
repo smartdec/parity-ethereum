@@ -33,6 +33,8 @@ use externalities::*;
 use trace::{self, Tracer, VMTracer};
 use transaction::{Action, SignedTransaction};
 use crossbeam;
+use shadow_mem::fake::{ShadowFake};
+use shadow_mem::{ShadowReturnData};
 pub use executed::{Executed, ExecutionResult};
 
 #[cfg(debug_assertions)]
@@ -82,23 +84,25 @@ pub fn contract_address(address_scheme: CreateContractAddress, sender: &Address,
 }
 
 /// Convert a finalization result into a VM message call result.
-pub fn into_message_call_result(result: vm::Result<FinalizationResult>) -> vm::MessageCallResult {
+// TODO insert generic for shadow
+pub fn into_message_call_result(result: vm::Result<FinalizationResult>) -> vm::MessageCallResult<ShadowFake> {
 	match result {
-		Ok(FinalizationResult { gas_left, return_data, apply_state: true }) => vm::MessageCallResult::Success(gas_left, return_data),
-		Ok(FinalizationResult { gas_left, return_data, apply_state: false }) => vm::MessageCallResult::Reverted(gas_left, return_data),
+		Ok(FinalizationResult { gas_left, return_data, apply_state: true }) => vm::MessageCallResult::Success(gas_left, return_data, ShadowReturnData::empty()),
+		Ok(FinalizationResult { gas_left, return_data, apply_state: false }) => vm::MessageCallResult::Reverted(gas_left, return_data, ShadowReturnData::empty()),
 		_ => vm::MessageCallResult::Failed
 	}
 }
 
 /// Convert a finalization result into a VM contract create result.
-pub fn into_contract_create_result(result: vm::Result<FinalizationResult>, address: &Address, substate: &mut Substate) -> vm::ContractCreateResult {
+// TODO insert generic for shadow
+pub fn into_contract_create_result(result: vm::Result<FinalizationResult>, address: &Address, substate: &mut Substate) -> vm::ContractCreateResult<ShadowFake> {
 	match result {
 		Ok(FinalizationResult { gas_left, apply_state: true, .. }) => {
 			substate.contracts_created.push(address.clone());
 			vm::ContractCreateResult::Created(address.clone(), gas_left)
 		},
 		Ok(FinalizationResult { gas_left, apply_state: false, return_data }) => {
-			vm::ContractCreateResult::Reverted(gas_left, return_data)
+			vm::ContractCreateResult::Reverted(gas_left, return_data, ShadowReturnData::empty())
 		},
 		_ => vm::ContractCreateResult::Failed,
 	}
@@ -194,13 +198,14 @@ pub type ExecutiveTrapResult<'a, T> = vm::TrapResult<T, CallCreateExecutive<'a>,
 /// Trap error for executive.
 pub type ExecutiveTrapError<'a> = vm::TrapError<CallCreateExecutive<'a>, CallCreateExecutive<'a>>;
 
+// TODO insert generic for shadow
 enum CallCreateExecutiveKind {
 	Transfer(ActionParams),
 	CallBuiltin(ActionParams),
 	ExecCall(ActionParams, Substate),
 	ExecCreate(ActionParams, Substate),
-	ResumeCall(OriginInfo, Box<ResumeCall>, Substate),
-	ResumeCreate(OriginInfo, Box<ResumeCreate>, Substate),
+	ResumeCall(OriginInfo, Box<ResumeCall<ShadowFake>>, Substate),
+	ResumeCreate(OriginInfo, Box<ResumeCreate<ShadowFake>>, Substate),
 }
 
 /// Executive for a raw call/create action.
@@ -527,7 +532,8 @@ impl<'a> CallCreateExecutive<'a> {
 	/// Resume execution from a call trap previsouly trapped by `exec`.
 	///
 	/// Current-level tracing is expected to be handled by caller.
-	pub fn resume_call<B: 'a + StateBackend, T: Tracer, V: VMTracer>(mut self, result: vm::MessageCallResult, state: &mut State<B>, substate: &mut Substate, tracer: &mut T, vm_tracer: &mut V) -> ExecutiveTrapResult<'a, FinalizationResult> {
+	// TODO insert generic for shadow
+	pub fn resume_call<B: 'a + StateBackend, T: Tracer, V: VMTracer>(mut self, result: vm::MessageCallResult<ShadowFake>, state: &mut State<B>, substate: &mut Substate, tracer: &mut T, vm_tracer: &mut V) -> ExecutiveTrapResult<'a, FinalizationResult> {
 		match self.kind {
 			CallCreateExecutiveKind::ResumeCall(origin_info, resume, mut unconfirmed_substate) => {
 				let out = {
@@ -566,7 +572,8 @@ impl<'a> CallCreateExecutive<'a> {
 	/// Resume execution from a create trap previsouly trapped by `exec`.
 	///
 	/// Current-level tracing is expected to be handled by caller.
-	pub fn resume_create<B: 'a + StateBackend, T: Tracer, V: VMTracer>(mut self, result: vm::ContractCreateResult, state: &mut State<B>, substate: &mut Substate, tracer: &mut T, vm_tracer: &mut V) -> ExecutiveTrapResult<'a, FinalizationResult> {
+	// TODO insert generic for shadow
+	pub fn resume_create<B: 'a + StateBackend, T: Tracer, V: VMTracer>(mut self, result: vm::ContractCreateResult<ShadowFake>, state: &mut State<B>, substate: &mut Substate, tracer: &mut T, vm_tracer: &mut V) -> ExecutiveTrapResult<'a, FinalizationResult> {
 		match self.kind {
 			CallCreateExecutiveKind::ResumeCreate(origin_info, resume, mut unconfirmed_substate) => {
 				let out = {

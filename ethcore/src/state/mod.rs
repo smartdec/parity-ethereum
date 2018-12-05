@@ -41,6 +41,7 @@ use types::state_diff::StateDiff;
 use transaction::SignedTransaction;
 use state_db::StateDB;
 use factory::VmFactory;
+use shadow_mem::fake::ShadowFake;
 
 use ethereum_types::{H256, U256, Address};
 use hashdb::{HashDB, AsHashDB};
@@ -107,9 +108,10 @@ enum AccountState {
 /// and the modification status.
 /// Account entry can contain existing (`Some`) or non-existing
 /// account (`None`)
+// TODO insert generic for shadow
 struct AccountEntry {
 	/// Account entry. `None` if account known to be non-existant.
-	account: Option<Account>,
+	account: Option<Account<ShadowFake>>,
 	/// Unmodified account balance.
 	old_balance: Option<U256>,
 	/// Entry state.
@@ -148,7 +150,8 @@ impl AccountEntry {
 	}
 
 	// Create a new account entry and mark it as dirty.
-	fn new_dirty(account: Option<Account>) -> AccountEntry {
+	// TODO insert generic for shadow
+	fn new_dirty(account: Option<Account<ShadowFake>>) -> AccountEntry {
 		AccountEntry {
 			old_balance: account.as_ref().map(|a| a.balance().clone()),
 			account: account,
@@ -157,7 +160,8 @@ impl AccountEntry {
 	}
 
 	// Create a new account entry and mark it as clean.
-	fn new_clean(account: Option<Account>) -> AccountEntry {
+	// TODO insert generic for shadow
+	fn new_clean(account: Option<Account<ShadowFake>>) -> AccountEntry {
 		AccountEntry {
 			old_balance: account.as_ref().map(|a| a.balance().clone()),
 			account: account,
@@ -166,7 +170,8 @@ impl AccountEntry {
 	}
 
 	// Create a new account entry and mark it as clean and cached.
-	fn new_clean_cached(account: Option<Account>) -> AccountEntry {
+	// TODO insert generic for shadow
+	fn new_clean_cached(account: Option<Account<ShadowFake>>) -> AccountEntry {
 		AccountEntry {
 			old_balance: account.as_ref().map(|a| a.balance().clone()),
 			account: account,
@@ -488,7 +493,9 @@ impl<B: Backend> State<B> {
 	pub fn into_account(self, account: &Address) -> TrieResult<(Option<Arc<Bytes>>, HashMap<H256, H256>)> {
 		// TODO: deconstruct without cloning.
 		let account = self.require(account, true)?;
-		Ok((account.code().clone(), account.storage_changes().clone()))
+		//TODO passthrought shadow value
+		let storage: HashMap<H256, H256> = account.storage_changes().into_iter().map(|(key, value)|{(key, value.0)}).collect();
+		Ok((account.code().clone(), storage))
 	}
 
 	/// Return reference to root
@@ -576,7 +583,8 @@ impl<B: Backend> State<B> {
 				match checkpoint.get(address) {
 					// The account exists at this checkpoint.
 					Some(Some(AccountEntry { account: Some(ref account), .. })) => {
-						if let Some(value) = account.cached_storage_at(key) {
+						// TODO passthrough shadow value
+						if let Some((value, _)) = account.cached_storage_at(key) {
 							return Ok(Some(value));
 						} else {
 							// This account has checkpoint entry, but the key is not in the entry's cache. We can use
@@ -622,11 +630,12 @@ impl<B: Backend> State<B> {
 		}
 	}
 
+	// TODO insert generic for shadow
 	fn storage_at_inner<FCachedStorageAt, FStorageAt>(
 		&self, address: &Address, key: &H256, f_cached_at: FCachedStorageAt, f_at: FStorageAt,
 	) -> TrieResult<H256> where
-		FCachedStorageAt: Fn(&Account, &H256) -> Option<H256>,
-		FStorageAt: Fn(&Account, &HashDB<KeccakHasher, DBValue>, &H256) -> TrieResult<H256>
+		FCachedStorageAt: Fn(&Account<ShadowFake>, &H256) -> Option<H256>,
+		FStorageAt: Fn(&Account<ShadowFake>, &HashDB<KeccakHasher, DBValue>, &H256) -> TrieResult<H256>
 	{
 		// Storage key search and update works like this:
 		// 1. If there's an entry for the account in the local cache check for the key and return it if found.
@@ -689,22 +698,44 @@ impl<B: Backend> State<B> {
 	}
 
 	/// Mutate storage of account `address` so that it is `value` for `key`.
+	// TODO Passthrought shadow value
 	pub fn storage_at(&self, address: &Address, key: &H256) -> TrieResult<H256> {
 		self.storage_at_inner(
 			address,
 			key,
-			|account, key| { account.cached_storage_at(key) },
-			|account, db, key| { account.storage_at(db, key) },
+			|account, key| {
+				match account.cached_storage_at(key) {
+					Some((value, shadow_value)) => Some(value),
+					None => None
+				}
+			},
+			|account, db, key| {
+				match account.storage_at(db, key) {
+					Ok((value, shadow_value)) => Ok(value),
+					Err(E) => Err(E)
+				}
+			},
 		)
 	}
 
 	/// Get the value of storage after last state commitment.
+	// TODO Passthrought shadow value
 	pub fn original_storage_at(&self, address: &Address, key: &H256) -> TrieResult<H256> {
 		self.storage_at_inner(
 			address,
 			key,
-			|account, key| { account.cached_original_storage_at(key) },
-			|account, db, key| { account.original_storage_at(db, key) },
+			|account, key| {
+				match account.cached_original_storage_at(key) {
+					Some((value, shadow_value)) => Some(value),
+					None => None
+				}
+			},
+			|account, db, key| {
+				match account.original_storage_at(db, key) {
+					Ok((value, shadow_value)) => Ok(value),
+					Err(E) => Err(E)
+				}
+			},
 		)
 	}
 
@@ -766,10 +797,11 @@ impl<B: Backend> State<B> {
 	}
 
 	/// Mutate storage of account `a` so that it is `value` for `key`.
+	// TODO Passthrough shadow_value
 	pub fn set_storage(&mut self, a: &Address, key: H256, value: H256) -> TrieResult<()> {
 		trace!(target: "state", "set_storage({}:{:x} to {:x})", a, key, value);
 		if self.storage_at(a, &key)? != value {
-			self.require(a, false)?.set_storage(key, value)
+			self.require(a, false)?.set_storage(key, value, Default::default())
 		}
 
 		Ok(())
@@ -1021,8 +1053,9 @@ impl<B: Backend> State<B> {
 	}
 
 	/// Load required account data from the databases. Returns whether the cache succeeds.
+	// TODO insert generic for shadow
 	#[must_use]
-	fn update_account_cache(require: RequireCache, account: &mut Account, state_db: &B, db: &HashDB<KeccakHasher, DBValue>) -> bool {
+	fn update_account_cache(require: RequireCache, account: &mut Account<ShadowFake>, state_db: &B, db: &HashDB<KeccakHasher, DBValue>) -> bool {
 		if let RequireCache::None = require {
 			return true;
 		}
@@ -1060,8 +1093,9 @@ impl<B: Backend> State<B> {
 	/// Check caches for required data
 	/// First searches for account in the local, then the shared cache.
 	/// Populates local cache if nothing found.
+	// TODO insert generic for shadow
 	fn ensure_cached<F, U>(&self, a: &Address, require: RequireCache, check_null: bool, f: F) -> TrieResult<U>
-		where F: Fn(Option<&Account>) -> U {
+		where F: Fn(Option<&Account<ShadowFake>>) -> U {
 		// check local cache first
 		if let Some(ref mut maybe_acc) = self.cache.borrow_mut().get_mut(a) {
 			if let Some(ref mut account) = maybe_acc.account {
@@ -1108,14 +1142,16 @@ impl<B: Backend> State<B> {
 	}
 
 	/// Pull account `a` in our cache from the trie DB. `require_code` requires that the code be cached, too.
-	fn require<'a>(&'a self, a: &Address, require_code: bool) -> TrieResult<RefMut<'a, Account>> {
+	// TODO insert generic for shadow
+	fn require<'a>(&'a self, a: &Address, require_code: bool) -> TrieResult<RefMut<'a, Account<ShadowFake>>> {
 		self.require_or_from(a, require_code, || Account::new_basic(0u8.into(), self.account_start_nonce), |_| {})
 	}
 
 	/// Pull account `a` in our cache from the trie DB. `require_code` requires that the code be cached, too.
 	/// If it doesn't exist, make account equal the evaluation of `default`.
-	fn require_or_from<'a, F, G>(&'a self, a: &Address, require_code: bool, default: F, not_default: G) -> TrieResult<RefMut<'a, Account>>
-		where F: FnOnce() -> Account, G: FnOnce(&mut Account),
+	// TODO insert generic for shadow
+	fn require_or_from<'a, F, G>(&'a self, a: &Address, require_code: bool, default: F, not_default: G) -> TrieResult<RefMut<'a, Account<ShadowFake>>>
+		where F: FnOnce() -> Account<ShadowFake>, G: FnOnce(&mut Account<ShadowFake>),
 	{
 		let contains_key = self.cache.borrow().contains_key(a);
 		if !contains_key {
@@ -1200,6 +1236,7 @@ impl<B: Backend> State<B> {
 	/// Requires a secure trie to be used for correctness.
 	/// `account_key` == keccak(address)
 	/// `storage_key` == keccak(key)
+	// TODO passtrough shadow value
 	pub fn prove_storage(&self, account_key: H256, storage_key: H256) -> TrieResult<(Vec<Bytes>, H256)> {
 		// TODO: probably could look into cache somehow but it's keyed by
 		// address, not keccak(address).
@@ -1211,7 +1248,10 @@ impl<B: Backend> State<B> {
 		};
 
 		let account_db = self.factories.accountdb.readonly(self.db.as_hashdb(), account_key);
-		acc.prove_storage(account_db.as_hashdb(), storage_key)
+		match acc.prove_storage(account_db.as_hashdb(), storage_key) {
+			Ok((bytes, (value, shadow_value))) => Ok((bytes, value)),
+			Err(E) => Err(E)
+		}
 	}
 }
 

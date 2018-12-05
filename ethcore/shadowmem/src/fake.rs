@@ -6,7 +6,7 @@ extern crate parity_bytes;
 use ethereum_types::{U256, Address, H256};
 use super::Shadow;
 
-#[derive(Default, Copy, Clone, PartialEq, Eq)]
+#[derive(Default, Copy, Clone, PartialEq, Eq, RlpEncodable, RlpDecodable)]
 pub struct ShadowFake;
 
 impl Shadow for ShadowFake {

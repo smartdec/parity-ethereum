@@ -106,9 +106,10 @@ extern crate stats;
 extern crate stop_guard;
 extern crate using_queue;
 extern crate vm;
-extern crate wasm;
+//extern crate wasm;
 extern crate memory_cache;
 extern crate journaldb;
+extern crate shadow_mem;
 #[cfg(any(test, feature = "json-tests", feature = "test-helpers"))]
 extern crate tempdir;
 

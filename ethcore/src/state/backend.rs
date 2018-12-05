@@ -31,8 +31,10 @@ use memorydb::MemoryDB;
 use hashdb::{AsHashDB, HashDB};
 use kvdb::DBValue;
 use keccak_hasher::KeccakHasher;
+use shadow_mem::fake::{ShadowFake};
 
 /// State backend. See module docs for more details.
+// TODO insert generic for shadow
 pub trait Backend: Send {
 	/// Treat the backend as a read-only hashdb.
 	fn as_hashdb(&self) -> &HashDB<KeccakHasher, DBValue>;
@@ -41,7 +43,7 @@ pub trait Backend: Send {
 	fn as_hashdb_mut(&mut self) -> &mut HashDB<KeccakHasher, DBValue>;
 
 	/// Add an account entry to the cache.
-	fn add_to_account_cache(&mut self, addr: Address, data: Option<Account>, modified: bool);
+	fn add_to_account_cache(&mut self, addr: Address, data: Option<Account<ShadowFake>>, modified: bool);
 
 	/// Add a global code cache entry. This doesn't need to worry about canonicality because
 	/// it simply maps hashes to raw code and will always be correct in the absence of
@@ -50,14 +52,14 @@ pub trait Backend: Send {
 
 	/// Get basic copy of the cached account. Not required to include storage.
 	/// Returns 'None' if cache is disabled or if the account is not cached.
-	fn get_cached_account(&self, addr: &Address) -> Option<Option<Account>>;
+	fn get_cached_account(&self, addr: &Address) -> Option<Option<Account<ShadowFake>>>;
 
 	/// Get value from a cached account.
 	/// `None` is passed to the closure if the account entry cached
 	/// is known not to exist.
 	/// `None` is returned if the entry is not cached.
 	fn get_cached<F, U>(&self, a: &Address, f: F) -> Option<U>
-		where F: FnOnce(Option<&mut Account>) -> U;
+		where F: FnOnce(Option<&mut Account<ShadowFake>>) -> U;
 
 	/// Get cached code based on hash.
 	fn get_cached_code(&self, hash: &H256) -> Option<Arc<Vec<u8>>>;
@@ -114,14 +116,15 @@ impl AsHashDB<KeccakHasher, DBValue> for ProofCheck {
 	fn as_hashdb_mut(&mut self) -> &mut HashDB<KeccakHasher, DBValue> { self }
 }
 
+// TODO insert generic for shadow
 impl Backend for ProofCheck {
 	fn as_hashdb(&self) -> &HashDB<KeccakHasher, DBValue> { self }
 	fn as_hashdb_mut(&mut self) -> &mut HashDB<KeccakHasher, DBValue> { self }
-	fn add_to_account_cache(&mut self, _addr: Address, _data: Option<Account>, _modified: bool) {}
+	fn add_to_account_cache(&mut self, _addr: Address, _data: Option<Account<ShadowFake>>, _modified: bool) {}
 	fn cache_code(&self, _hash: H256, _code: Arc<Vec<u8>>) {}
-	fn get_cached_account(&self, _addr: &Address) -> Option<Option<Account>> { None }
+	fn get_cached_account(&self, _addr: &Address) -> Option<Option<Account<ShadowFake>>> { None }
 	fn get_cached<F, U>(&self, _a: &Address, _f: F) -> Option<U>
-		where F: FnOnce(Option<&mut Account>) -> U
+		where F: FnOnce(Option<&mut Account<ShadowFake>>) -> U
 	{
 		None
 	}
@@ -183,19 +186,20 @@ impl<H: AsHashDB<KeccakHasher, DBValue> + Send + Sync> HashDB<KeccakHasher, DBVa
 	}
 }
 
+// TODO insert generic for shadow
 impl<H: AsHashDB<KeccakHasher, DBValue> + Send + Sync> Backend for Proving<H> {
 	fn as_hashdb(&self) -> &HashDB<KeccakHasher, DBValue> { self }
 
 	fn as_hashdb_mut(&mut self) -> &mut HashDB<KeccakHasher, DBValue> { self }
 
-	fn add_to_account_cache(&mut self, _: Address, _: Option<Account>, _: bool) { }
+	fn add_to_account_cache(&mut self, _: Address, _: Option<Account<ShadowFake>>, _: bool) { }
 
 	fn cache_code(&self, _: H256, _: Arc<Vec<u8>>) { }
 
-	fn get_cached_account(&self, _: &Address) -> Option<Option<Account>> { None }
+	fn get_cached_account(&self, _: &Address) -> Option<Option<Account<ShadowFake>>> { None }
 
 	fn get_cached<F, U>(&self, _: &Address, _: F) -> Option<U>
-		where F: FnOnce(Option<&mut Account>) -> U
+		where F: FnOnce(Option<&mut Account<ShadowFake>>) -> U
 	{
 		None
 	}
@@ -237,6 +241,7 @@ impl<H: AsHashDB<KeccakHasher, DBValue> + Clone> Clone for Proving<H> {
 /// it. Doesn't cache anything.
 pub struct Basic<H>(pub H);
 
+// TODO insert generic for shadow
 impl<H: AsHashDB<KeccakHasher, DBValue> + Send + Sync> Backend for Basic<H> {
 	fn as_hashdb(&self) -> &HashDB<KeccakHasher, DBValue> {
 		self.0.as_hashdb()
@@ -246,14 +251,14 @@ impl<H: AsHashDB<KeccakHasher, DBValue> + Send + Sync> Backend for Basic<H> {
 		self.0.as_hashdb_mut()
 	}
 
-	fn add_to_account_cache(&mut self, _: Address, _: Option<Account>, _: bool) { }
+	fn add_to_account_cache(&mut self, _: Address, _: Option<Account<ShadowFake>>, _: bool) { }
 
 	fn cache_code(&self, _: H256, _: Arc<Vec<u8>>) { }
 
-	fn get_cached_account(&self, _: &Address) -> Option<Option<Account>> { None }
+	fn get_cached_account(&self, _: &Address) -> Option<Option<Account<ShadowFake>>> { None }
 
 	fn get_cached<F, U>(&self, _: &Address, _: F) -> Option<U>
-		where F: FnOnce(Option<&mut Account>) -> U
+		where F: FnOnce(Option<&mut Account<ShadowFake>>) -> U
 	{
 		None
 	}

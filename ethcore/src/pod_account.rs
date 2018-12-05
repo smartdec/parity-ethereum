@@ -32,6 +32,7 @@ use state::Account;
 use ethjson;
 use types::account_diff::*;
 use rlp::{self, RlpStream};
+use shadow_mem::fake::ShadowFake;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// An account, expressed as Plain-Old-Data (hence the name).
@@ -47,14 +48,15 @@ pub struct PodAccount {
 	pub storage: BTreeMap<H256, H256>,
 }
 
+// TODO insert generic for shadow
 impl PodAccount {
 	/// Convert Account to a PodAccount.
 	/// NOTE: This will silently fail unless the account is fully cached.
-	pub fn from_account(acc: &Account) -> PodAccount {
+	pub fn from_account(acc: &Account<ShadowFake>) -> PodAccount {
 		PodAccount {
 			balance: *acc.balance(),
 			nonce: *acc.nonce(),
-			storage: acc.storage_changes().iter().fold(BTreeMap::new(), |mut m, (k, v)| {m.insert(k.clone(), v.clone()); m}),
+			storage: acc.storage_changes().iter().fold(BTreeMap::new(), |mut m, (k, v)| {m.insert(k.clone(), v.0.clone()); m}),
 			code: acc.code().map(|x| x.to_vec()),
 		}
 	}
